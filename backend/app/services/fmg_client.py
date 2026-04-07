@@ -39,7 +39,6 @@ class FMGClient:
         resp.raise_for_status()
         body = resp.json()
 
-        # FMG wraps results in body["result"] (list of dicts with "data", "status", "url")
         result = body.get("result")
         if isinstance(result, list) and len(result) == 1:
             entry = result[0]
@@ -91,19 +90,25 @@ class FMGClient:
             self._session = None
 
     # ------------------------------------------------------------------
-    # Profile retrieval
+    # Profile retrieval — URL patterns per profile type
     # ------------------------------------------------------------------
 
-    # URL patterns for each profile type inside an ADOM
+    # Security profiles live under /pm/config/adom/{adom}/obj/...
     PROFILE_URLS: dict[str, str] = {
         "application": "/pm/config/adom/{adom}/obj/application/list",
         "webfilter": "/pm/config/adom/{adom}/obj/webfilter/profile",
         "ips": "/pm/config/adom/{adom}/obj/ips/sensor",
-        "sdwan": "/pm/config/adom/{adom}/obj/dynamic/virtual-wan-link/template",
     }
+
+    # SD-WAN templates use wanprof scope
+    SDWAN_LIST_URL = "/pm/wanprof/adom/{adom}"
+    SDWAN_DETAIL_URL = "/pm/config/adom/{adom}/wanprof/{name}/system/sdwan"
 
     async def list_profiles(self, profile_type: str) -> list[str]:
         """Return list of profile names for a given type."""
+        if profile_type == "sdwan":
+            return await self._list_sdwan()
+
         url_tpl = self.PROFILE_URLS.get(profile_type)
         if not url_tpl:
             raise ValueError(f"Unknown profile type: {profile_type}")
@@ -115,6 +120,9 @@ class FMGClient:
 
     async def get_profile(self, profile_type: str, name: str) -> dict[str, Any]:
         """Return full configuration for one profile."""
+        if profile_type == "sdwan":
+            return await self._get_sdwan(name)
+
         url_tpl = self.PROFILE_URLS.get(profile_type)
         if not url_tpl:
             raise ValueError(f"Unknown profile type: {profile_type}")
@@ -127,32 +135,46 @@ class FMGClient:
         return {"_raw": data}
 
     # ------------------------------------------------------------------
-    # SD-WAN specific (templates live under a different path)
+    # SD-WAN template helpers
     # ------------------------------------------------------------------
 
-    async def list_sdwan_templates(self) -> list[str]:
-        url = f"/pm/config/adom/{settings.fmg_adom}/obj/dynamic/virtual-wan-link/template"
-        try:
-            data = await self._call("get", [{"url": url, "fields": ["name"]}])
-        except RuntimeError:
-            # Try the newer sdwan path
-            url = f"/pm/config/adom/{settings.fmg_adom}/obj/dynamic/virtual-wan-link/members"
-            data = await self._call("get", [{"url": url, "fields": ["name"]}])
+    async def _list_sdwan(self) -> list[str]:
+        url = self.SDWAN_LIST_URL.format(adom=settings.fmg_adom)
+        data = await self._call("get", [{"url": url, "fields": ["name"]}])
         if isinstance(data, list):
             return [item.get("name", "") for item in data if isinstance(item, dict)]
         return []
 
-    async def get_sdwan_template(self, name: str) -> dict[str, Any]:
-        url = (
-            f"/pm/config/adom/{settings.fmg_adom}"
-            f"/obj/dynamic/virtual-wan-link/template/{name}"
-        )
+    async def _get_sdwan(self, name: str) -> dict[str, Any]:
+        """Get the full SD-WAN config block for a wanprof template.
+
+        Fetches the parent sdwan object (includes health-check, service, zone
+        as nested children via loadsub).
+        """
+        url = self.SDWAN_DETAIL_URL.format(adom=settings.fmg_adom, name=name)
         data = await self._call("get", [{"url": url}])
+
+        # Also fetch service rules and health checks explicitly for richer data
+        result: dict[str, Any] = {}
         if isinstance(data, dict):
-            return data
-        if isinstance(data, list) and len(data) == 1:
-            return data[0]
-        return {"_raw": data}
+            result = data
+        elif isinstance(data, list) and len(data) == 1:
+            result = data[0]
+        else:
+            result = {"_raw": data}
+
+        # Enrich with sub-tables if not already present
+        for sub in ("service", "health-check", "zone", "members"):
+            if sub not in result or not result[sub]:
+                try:
+                    sub_data = await self._call("get", [{"url": f"{url}/{sub}"}])
+                    result[sub] = sub_data
+                except Exception:
+                    pass
+
+        # Add template name for clarity
+        result["_template_name"] = name
+        return result
 
 
 # Singleton

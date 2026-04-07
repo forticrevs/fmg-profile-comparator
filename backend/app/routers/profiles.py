@@ -27,7 +27,7 @@ def _validate_type(profile_type: str) -> None:
 
 
 # ------------------------------------------------------------------
-# List
+# Static routes first
 # ------------------------------------------------------------------
 
 @router.get("/types")
@@ -40,32 +40,8 @@ async def get_profile_types() -> list[dict[str, str]]:
     ]
 
 
-@router.get("/{profile_type}")
-async def list_profiles(profile_type: str) -> ProfileListResponse:
-    _validate_type(profile_type)
-    try:
-        names = await fmg.list_profiles(profile_type)
-    except Exception as exc:
-        raise HTTPException(502, f"FMG error: {exc}")
-    return ProfileListResponse(profile_type=profile_type, profiles=names)
-
-
 # ------------------------------------------------------------------
-# Detail
-# ------------------------------------------------------------------
-
-@router.get("/{profile_type}/{name}")
-async def get_profile(profile_type: str, name: str) -> ProfileDetail:
-    _validate_type(profile_type)
-    try:
-        data = await fmg.get_profile(profile_type, name)
-    except Exception as exc:
-        raise HTTPException(502, f"FMG error: {exc}")
-    return ProfileDetail(name=name, profile_type=profile_type, data=data)
-
-
-# ------------------------------------------------------------------
-# Compare
+# Compare (MUST come before /{profile_type}/{name} to avoid conflict)
 # ------------------------------------------------------------------
 
 @router.get("/{profile_type}/compare")
@@ -93,7 +69,7 @@ async def compare(
 
 
 # ------------------------------------------------------------------
-# Pinned fields
+# Pinned fields (MUST come before /{profile_type}/{name})
 # ------------------------------------------------------------------
 
 @router.get("/{profile_type}/pins")
@@ -113,3 +89,31 @@ async def toggle_pin(profile_type: str, body: PinToggleRequest) -> PinnedFieldsR
         profile_type=profile_type,
         pinned_fields=pin_store.get_pinned(profile_type),
     )
+
+
+# ------------------------------------------------------------------
+# List profiles
+# ------------------------------------------------------------------
+
+@router.get("/{profile_type}")
+async def list_profiles(profile_type: str) -> ProfileListResponse:
+    _validate_type(profile_type)
+    try:
+        names = await fmg.list_profiles(profile_type)
+    except Exception as exc:
+        raise HTTPException(502, f"FMG error: {exc}")
+    return ProfileListResponse(profile_type=profile_type, profiles=names)
+
+
+# ------------------------------------------------------------------
+# Detail (catch-all — MUST be last)
+# ------------------------------------------------------------------
+
+@router.get("/{profile_type}/{name}")
+async def get_profile(profile_type: str, name: str) -> ProfileDetail:
+    _validate_type(profile_type)
+    try:
+        data = await fmg.get_profile(profile_type, name)
+    except Exception as exc:
+        raise HTTPException(502, f"FMG error: {exc}")
+    return ProfileDetail(name=name, profile_type=profile_type, data=data)
