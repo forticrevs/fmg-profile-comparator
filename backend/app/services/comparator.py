@@ -29,6 +29,18 @@ def _make_label(field_path: str) -> str:
     return " > ".join(p.replace("_", " ").replace("-", " ").title() for p in parts if p)
 
 
+# Fields that are internal identifiers — never meaningful to compare
+EXCLUDED_FIELDS = {"oid", "uuid", "obj seq"}
+
+
+def _is_excluded(key: str) -> bool:
+    """Check if a flattened key ends with an excluded field name."""
+    leaf = key.rsplit(".", 1)[-1] if "." in key else key
+    # Strip array suffix like "[0]"
+    leaf = leaf.split("[")[0] if "[" in leaf else leaf
+    return leaf in EXCLUDED_FIELDS
+
+
 def compare_profiles(
     profiles: dict[str, dict[str, Any]],
 ) -> list[ComparisonField]:
@@ -38,10 +50,10 @@ def compare_profiles(
     for name, data in profiles.items():
         flat[name] = flatten(data)
 
-    # Collect all unique keys
+    # Collect all unique keys, excluding internal IDs
     all_keys: set[str] = set()
     for f in flat.values():
-        all_keys.update(f.keys())
+        all_keys.update(k for k in f.keys() if not _is_excluded(k))
 
     fields: list[ComparisonField] = []
     for key in sorted(all_keys):
