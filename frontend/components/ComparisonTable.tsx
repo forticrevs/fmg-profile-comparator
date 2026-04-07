@@ -14,12 +14,12 @@ interface Props {
 type FilterMode = "all" | "in_sync" | "differs" | "pinned";
 
 // ---------------------------------------------------------------------------
-// Grouping logic — turns flat dot-notation paths into a nested tree
+// Grouping logic
 // ---------------------------------------------------------------------------
 
 interface FieldGroup {
-  key: string;          // e.g. "health-check[0]" or "Top-Level Settings"
-  label: string;        // human-friendly label
+  key: string;
+  label: string;
   fields: ComparisonField[];
   children: FieldGroup[];
   syncCount: number;
@@ -27,12 +27,10 @@ interface FieldGroup {
 }
 
 function groupFields(fields: ComparisonField[]): FieldGroup[] {
-  // Bucket fields by their top-level key segment
   const buckets = new Map<string, ComparisonField[]>();
 
   for (const f of fields) {
     const path = f.field_path;
-    // Match top-level array keys like "health-check[0].xxx" or "service[2].yyy"
     const arrayMatch = path.match(/^([a-zA-Z_-]+)\[(\d+)\](.*)/);
     if (arrayMatch) {
       const [, arrName, idx] = arrayMatch;
@@ -40,14 +38,11 @@ function groupFields(fields: ComparisonField[]): FieldGroup[] {
       if (!buckets.has(bucketKey)) buckets.set(bucketKey, []);
       buckets.get(bucketKey)!.push(f);
     } else {
-      // Simple top-level key: "fail-detect", "name", etc.
       const dotIdx = path.indexOf(".");
       if (dotIdx === -1) {
-        // Truly scalar top-level field
         if (!buckets.has("__top__")) buckets.set("__top__", []);
         buckets.get("__top__")!.push(f);
       } else {
-        // Nested object like "options.something"
         const topKey = path.substring(0, dotIdx);
         if (!buckets.has(topKey)) buckets.set(topKey, []);
         buckets.get(topKey)!.push(f);
@@ -55,8 +50,6 @@ function groupFields(fields: ComparisonField[]): FieldGroup[] {
     }
   }
 
-  // Now consolidate array buckets into parent groups
-  // e.g. health-check[0], health-check[1] → parent "health-check"
   const parentGroups = new Map<string, FieldGroup[]>();
 
   for (const [key, fieldList] of buckets.entries()) {
@@ -66,7 +59,6 @@ function groupFields(fields: ComparisonField[]): FieldGroup[] {
     const arrayMatch = key.match(/^([a-zA-Z_-]+)\[(\d+)\]$/);
     if (arrayMatch) {
       const [, arrName, idx] = arrayMatch;
-      // Try to find a "name" field inside to use as label
       const nameField = fieldList.find(
         (f) =>
           f.field_path === `${arrName}[${idx}].name` ||
@@ -93,37 +85,26 @@ function groupFields(fields: ComparisonField[]): FieldGroup[] {
           ? "General Settings"
           : key.replace(/[_-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
-      const group: FieldGroup = {
-        key,
-        label,
-        fields: fieldList,
-        children: [],
-        syncCount,
-        diffCount,
-      };
-      parentGroups.set(key, [group]);
+      parentGroups.set(key, [
+        { key, label, fields: fieldList, children: [], syncCount, diffCount },
+      ]);
     }
   }
 
-  // Build final top-level groups
   const result: FieldGroup[] = [];
 
-  // General settings first
   if (parentGroups.has("__top__")) {
     result.push(...parentGroups.get("__top__")!);
     parentGroups.delete("__top__");
   }
 
-  // Everything else sorted alphabetically
   const sortedKeys = [...parentGroups.keys()].sort();
   for (const parentKey of sortedKeys) {
     const children = parentGroups.get(parentKey)!;
 
     if (children.length === 1 && !children[0].key.match(/\[\d+\]$/)) {
-      // Non-array group, just push directly
       result.push(children[0]);
     } else {
-      // Array parent — wrap children
       const allFields = children.flatMap((c) => c.fields);
       const syncCount = allFields.filter((f) => f.in_sync).length;
       const diffCount = allFields.length - syncCount;
@@ -154,13 +135,10 @@ function SyncBadge({ sync, diff }: { sync: number; diff: number }) {
   if (total === 0) return null;
   const pct = Math.round((sync / total) * 100);
   return (
-    <span className="flex items-center gap-2 text-xs">
-      <span
-        className="inline-block h-1.5 rounded-full bg-slate-700"
-        style={{ width: 60 }}
-      >
+    <span className="inline-flex items-center gap-2 text-[11px]">
+      <span className="inline-block h-1.5 rounded-full bg-slate-700 w-12">
         <span
-          className={`block h-full rounded-full ${
+          className={`block h-full rounded-full transition-all ${
             pct === 100
               ? "bg-emerald-500"
               : pct > 70
@@ -170,99 +148,22 @@ function SyncBadge({ sync, diff }: { sync: number; diff: number }) {
           style={{ width: `${pct}%` }}
         />
       </span>
-      <span className="text-slate-500">
-        {sync}/{total} in sync
+      <span className="text-slate-500 tabular-nums">
+        {sync}/{total}
       </span>
       {diff > 0 && (
-        <span className="text-amber-400 font-medium">{diff} differ</span>
+        <span className="text-amber-500 tabular-nums">{diff} ≠</span>
       )}
     </span>
   );
 }
 
-function FieldRow({
-  field,
-  profileNames,
-  isPinned,
-  isDrift,
-  pinLoading,
-  onPin,
-  indent,
-}: {
-  field: ComparisonField;
-  profileNames: string[];
-  isPinned: boolean;
-  isDrift: boolean;
-  pinLoading: boolean;
-  onPin: () => void;
-  indent: number;
-}) {
-  const formatValue = (v: unknown): string => {
-    if (v === "__MISSING__") return "—";
-    if (v === null || v === undefined) return "null";
-    if (typeof v === "boolean") return v ? "true" : "false";
-    if (typeof v === "object") return JSON.stringify(v);
-    return String(v);
-  };
-
-  // Strip the array prefix from the displayed field path for cleaner look
-  const shortPath = field.field_path.replace(/^[a-zA-Z_-]+\[\d+\]\./, "");
-
-  return (
-    <tr
-      className={`border-t border-slate-800/50 transition ${
-        isDrift
-          ? "bg-red-950/30"
-          : !field.in_sync
-          ? "bg-amber-950/10 hover:bg-amber-950/20"
-          : "hover:bg-slate-800/30"
-      }`}
-    >
-      <td className="px-3 py-1.5 text-center w-10">
-        <button
-          onClick={onPin}
-          disabled={pinLoading}
-          className={`text-sm transition ${
-            isPinned ? "text-cyan-400" : "text-slate-700 hover:text-slate-500"
-          }`}
-          title={isPinned ? "Unpin" : "Pin (must stay consistent)"}
-        >
-          {isPinned ? "📌" : "○"}
-        </button>
-      </td>
-      <td className="px-3 py-1.5" style={{ paddingLeft: 12 + indent * 16 }}>
-        <span className="text-slate-400 text-xs font-mono">{shortPath}</span>
-      </td>
-      {profileNames.map((name) => (
-        <td
-          key={name}
-          className="px-3 py-1.5 font-mono text-xs max-w-[220px] truncate"
-          title={formatValue(field.values[name])}
-        >
-          <span
-            className={
-              field.values[name] === "__MISSING__"
-                ? "text-slate-600 italic"
-                : field.in_sync
-                ? "text-slate-400"
-                : "text-white"
-            }
-          >
-            {formatValue(field.values[name])}
-          </span>
-        </td>
-      ))}
-      <td className="px-3 py-1.5 text-center w-16">
-        {isDrift ? (
-          <span className="text-red-400 text-xs font-bold">DRIFT</span>
-        ) : field.in_sync ? (
-          <span className="text-emerald-500/60">✓</span>
-        ) : (
-          <span className="text-amber-400">≠</span>
-        )}
-      </td>
-    </tr>
-  );
+function formatValue(v: unknown): string {
+  if (v === "__MISSING__") return "—";
+  if (v === null || v === undefined) return "null";
+  if (typeof v === "boolean") return v ? "true" : "false";
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
 }
 
 // ---------------------------------------------------------------------------
@@ -283,7 +184,6 @@ export default function ComparisonTable({
 
   const pinnedSet = useMemo(() => new Set(pinnedFields), [pinnedFields]);
 
-  // Apply filter/search to raw fields, then group
   const filteredFields = useMemo(() => {
     let result = fields;
     if (filter === "in_sync") result = result.filter((f) => f.in_sync);
@@ -325,38 +225,117 @@ export default function ComparisonTable({
     });
   };
 
-  // Stats
+  const allGroupKeys = useMemo(() => {
+    const keys: string[] = [];
+    for (const g of groups) {
+      keys.push(g.key);
+      for (const c of g.children) keys.push(c.key);
+    }
+    return keys;
+  }, [groups]);
+
   const syncCount = fields.filter((f) => f.in_sync).length;
   const diffCount = fields.filter((f) => !f.in_sync).length;
 
+  // Column count for colSpan
+  const colCount = profileNames.length + 3; // pin + field + profiles + status
+
+  const renderFieldRow = (
+    field: ComparisonField,
+    depth: number
+  ) => {
+    const isPinned = pinnedSet.has(field.field_path);
+    const isDrift = isPinned && !field.in_sync;
+    const shortPath = field.field_path.replace(/^[a-zA-Z_-]+\[\d+\]\./, "");
+
+    return (
+      <tr
+        key={field.field_path}
+        className={`border-t border-slate-800/40 ${
+          isDrift
+            ? "bg-red-950/30"
+            : !field.in_sync
+            ? "bg-amber-950/8 hover:bg-amber-950/15"
+            : "hover:bg-slate-800/20"
+        }`}
+      >
+        <td className="px-2 py-1 text-center w-8">
+          <button
+            onClick={() => handlePin(field.field_path)}
+            disabled={pinLoading === field.field_path}
+            className={`text-xs transition ${
+              isPinned
+                ? "text-cyan-400"
+                : "text-slate-700 hover:text-slate-500"
+            }`}
+            title={isPinned ? "Unpin" : "Pin"}
+          >
+            {isPinned ? "📌" : "○"}
+          </button>
+        </td>
+        <td
+          className="px-2 py-1 text-slate-400 text-xs font-mono truncate"
+          style={{ paddingLeft: 8 + depth * 16 }}
+          title={field.field_path}
+        >
+          {shortPath}
+        </td>
+        {profileNames.map((name) => (
+          <td
+            key={name}
+            className="px-2 py-1 font-mono text-xs truncate max-w-0"
+            title={formatValue(field.values[name])}
+          >
+            <span
+              className={
+                field.values[name] === "__MISSING__"
+                  ? "text-slate-600 italic"
+                  : field.in_sync
+                  ? "text-slate-500"
+                  : "text-slate-200"
+              }
+            >
+              {formatValue(field.values[name])}
+            </span>
+          </td>
+        ))}
+        <td className="px-2 py-1 text-center w-14">
+          {isDrift ? (
+            <span className="text-red-400 text-[10px] font-bold">DRIFT</span>
+          ) : field.in_sync ? (
+            <span className="text-emerald-600">✓</span>
+          ) : (
+            <span className="text-amber-400 text-xs">≠</span>
+          )}
+        </td>
+      </tr>
+    );
+  };
+
   const renderGroup = (group: FieldGroup, depth: number = 0) => {
     const isCollapsed = collapsed.has(group.key);
-    const hasChildren = group.children.length > 0;
-    const hasFields = group.fields.length > 0;
 
     return (
       <tbody key={group.key}>
         {/* Section header */}
         <tr
-          className={`${
+          className={`cursor-pointer select-none ${
             depth === 0
-              ? "bg-slate-800/80 border-t-2 border-slate-600"
-              : "bg-slate-800/40 border-t border-slate-700"
-          } cursor-pointer select-none`}
+              ? "bg-slate-800/70 border-t-2 border-slate-600"
+              : "bg-slate-800/30 border-t border-slate-700/50"
+          }`}
           onClick={() => toggleCollapse(group.key)}
         >
-          <td
-            colSpan={profileNames.length + 3}
-            className="px-3 py-2"
-            style={{ paddingLeft: 12 + depth * 20 }}
-          >
-            <div className="flex items-center gap-3">
-              <span className="text-slate-500 text-xs w-4">
+          <td colSpan={colCount} className="px-2 py-1.5" style={{ paddingLeft: 8 + depth * 16 }}>
+            <div className="flex items-center gap-2">
+              <span className="text-slate-600 text-[10px] w-3">
                 {isCollapsed ? "▶" : "▼"}
               </span>
               <span
                 className={`font-medium ${
-                  depth === 0 ? "text-slate-200 text-sm" : "text-slate-300 text-xs"
+                  depth === 0
+                    ? "text-slate-200 text-[13px]"
+                    : "text-slate-300 text-xs"
                 }`}
               >
                 {group.label}
@@ -366,46 +345,31 @@ export default function ComparisonTable({
           </td>
         </tr>
 
-        {/* Fields in this group */}
         {!isCollapsed &&
-          hasFields &&
-          group.fields.map((field) => {
-            const isPinned = pinnedSet.has(field.field_path);
-            const isDrift = isPinned && !field.in_sync;
-            return (
-              <FieldRow
-                key={field.field_path}
-                field={field}
-                profileNames={profileNames}
-                isPinned={isPinned}
-                isDrift={isDrift}
-                pinLoading={pinLoading === field.field_path}
-                onPin={() => handlePin(field.field_path)}
-                indent={depth + 1}
-              />
-            );
-          })}
+          group.fields.map((field) => renderFieldRow(field, depth + 1))}
 
-        {/* Child groups (array entries) */}
         {!isCollapsed &&
-          hasChildren &&
           group.children.map((child) => renderGroup(child, depth + 1))}
       </tbody>
     );
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {/* Stats Bar */}
       <div className="flex items-center gap-4 text-sm">
-        <span className="text-slate-400">{fields.length} fields total</span>
-        <span className="text-emerald-400">● {syncCount} in sync</span>
-        <span className="text-amber-400">● {diffCount} differ</span>
-        <span className="text-cyan-400">📌 {pinnedFields.length} pinned</span>
+        <span className="text-slate-400 tabular-nums">
+          {fields.length} fields
+        </span>
+        <span className="text-emerald-400 tabular-nums">● {syncCount} in sync</span>
+        <span className="text-amber-400 tabular-nums">● {diffCount} differ</span>
+        <span className="text-cyan-400 tabular-nums">
+          📌 {pinnedFields.length} pinned
+        </span>
       </div>
 
-      {/* Filter Tabs + Search */}
-      <div className="flex items-center gap-3 flex-wrap">
+      {/* Filter + Controls */}
+      <div className="flex items-center gap-2 flex-wrap">
         {(
           [
             ["all", "All"],
@@ -417,10 +381,10 @@ export default function ComparisonTable({
           <button
             key={mode}
             onClick={() => setFilter(mode)}
-            className={`px-3 py-1 rounded-full text-sm font-medium transition ${
+            className={`px-2.5 py-0.5 rounded-full text-xs font-medium transition ${
               filter === mode
                 ? "bg-cyan-600 text-white"
-                : "bg-slate-800 text-slate-400 hover:text-white"
+                : "bg-slate-800 text-slate-500 hover:text-white"
             }`}
           >
             {label}
@@ -428,15 +392,15 @@ export default function ComparisonTable({
         ))}
         <div className="ml-auto flex items-center gap-2">
           <button
-            onClick={() => setCollapsed(new Set(groups.map((g) => g.key).concat(groups.flatMap((g) => g.children.map((c) => c.key)))))}
-            className="text-xs text-slate-500 hover:text-slate-300 transition"
+            onClick={() => setCollapsed(new Set(allGroupKeys))}
+            className="text-[11px] text-slate-600 hover:text-slate-300 transition"
           >
             Collapse All
           </button>
-          <span className="text-slate-700">|</span>
+          <span className="text-slate-800">|</span>
           <button
             onClick={() => setCollapsed(new Set())}
-            className="text-xs text-slate-500 hover:text-slate-300 transition"
+            className="text-[11px] text-slate-600 hover:text-slate-300 transition"
           >
             Expand All
           </button>
@@ -445,32 +409,41 @@ export default function ComparisonTable({
             placeholder="Search fields..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="ml-3 bg-slate-800 border border-slate-600 text-white rounded-lg px-3 py-1 text-sm w-56 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+            className="ml-2 bg-slate-900 border border-slate-700 text-white rounded-md px-2.5 py-1 text-xs w-48 focus:outline-none focus:ring-1 focus:ring-cyan-600"
           />
         </div>
       </div>
 
       {/* Table */}
-      <div className="overflow-x-auto border border-slate-700 rounded-xl">
-        <table className="w-full text-sm">
+      <div className="overflow-x-auto border border-slate-700/50 rounded-lg">
+        <table className="w-full text-sm table-fixed">
+          <colgroup>
+            <col style={{ width: 36 }} />
+            <col style={{ width: "22%" }} />
+            {profileNames.map((n) => (
+              <col key={n} />
+            ))}
+            <col style={{ width: 52 }} />
+          </colgroup>
           <thead>
-            <tr className="bg-slate-900">
-              <th className="text-left px-3 py-2.5 text-slate-500 font-medium w-10">
+            <tr className="bg-slate-900 border-b border-slate-700">
+              <th className="px-2 py-2 text-slate-600 font-medium text-[11px] text-center">
                 Pin
               </th>
-              <th className="text-left px-3 py-2.5 text-slate-500 font-medium">
+              <th className="px-2 py-2 text-slate-600 font-medium text-[11px] text-left">
                 Field
               </th>
               {profileNames.map((name) => (
                 <th
                   key={name}
-                  className="text-left px-3 py-2.5 text-slate-500 font-medium font-mono text-xs"
+                  className="px-2 py-2 text-slate-600 font-medium text-[11px] text-left font-mono truncate"
+                  title={name}
                 >
                   {name}
                 </th>
               ))}
-              <th className="text-center px-3 py-2.5 text-slate-500 font-medium w-16">
-                Status
+              <th className="px-2 py-2 text-slate-600 font-medium text-[11px] text-center">
+                Sync
               </th>
             </tr>
           </thead>
@@ -480,8 +453,8 @@ export default function ComparisonTable({
             <tbody>
               <tr>
                 <td
-                  colSpan={profileNames.length + 3}
-                  className="px-4 py-8 text-center text-slate-500"
+                  colSpan={colCount}
+                  className="px-4 py-8 text-center text-slate-600 text-sm"
                 >
                   No fields match the current filter.
                 </td>
@@ -491,9 +464,9 @@ export default function ComparisonTable({
         </table>
       </div>
 
-      <p className="text-xs text-slate-600">
-        Showing {filteredFields.length} of {fields.length} fields across{" "}
-        {groups.length} groups
+      <p className="text-[11px] text-slate-700">
+        {filteredFields.length} of {fields.length} fields · {groups.length}{" "}
+        groups
       </p>
     </div>
   );

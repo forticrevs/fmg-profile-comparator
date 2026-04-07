@@ -1,0 +1,115 @@
+"use client";
+
+import { ProfileType } from "@/lib/api";
+
+interface Props {
+  types: ProfileType[];
+  onSelectType: (type: ProfileType) => void;
+}
+
+const TYPE_META: Record<
+  string,
+  { icon: string; color: string; description: string; gradient: string }
+> = {
+  application: {
+    icon: "🛡",
+    color: "cyan",
+    description:
+      "Category-based application blocking and monitoring with per-app overrides and protocol enforcement.",
+    gradient: "from-cyan-600/20 to-cyan-900/10",
+  },
+  webfilter: {
+    icon: "🌐",
+    color: "blue",
+    description:
+      "URL filtering, FortiGuard category enforcement, Safe Search, and web content inspection policies.",
+    gradient: "from-blue-600/20 to-blue-900/10",
+  },
+  ips: {
+    icon: "🔍",
+    color: "amber",
+    description:
+      "Signature and filter-based intrusion prevention with CVE targeting, quarantine, and packet logging.",
+    gradient: "from-amber-600/20 to-amber-900/10",
+  },
+  sdwan: {
+    icon: "🔀",
+    color: "emerald",
+    description:
+      "SD-WAN template comparison: zones, interfaces, routing rules, SLA health checks, and performance targets.",
+    gradient: "from-emerald-600/20 to-emerald-900/10",
+  },
+};
+
+const colorMap: Record<string, string> = {
+  cyan: "border-cyan-800 hover:border-cyan-600 hover:shadow-cyan-900/20",
+  blue: "border-blue-800 hover:border-blue-600 hover:shadow-blue-900/20",
+  amber: "border-amber-800 hover:border-amber-600 hover:shadow-amber-900/20",
+  emerald:
+    "border-emerald-800 hover:border-emerald-600 hover:shadow-emerald-900/20",
+};
+
+const iconBg: Record<string, string> = {
+  cyan: "bg-cyan-900/50",
+  blue: "bg-blue-900/50",
+  amber: "bg-amber-900/50",
+  emerald: "bg-emerald-900/50",
+};
+
+export default function ProfileDashboard({ types, onSelectType }: Props) {
+  return (
+    <div className="space-y-8">
+      <div>
+        <h2 className="text-2xl font-bold text-white mb-1">
+          Configuration Drift Analysis
+        </h2>
+        <p className="text-slate-500 text-sm max-w-2xl">
+          Select a profile type to compare configurations across cloned
+          profiles. Identify fields that have diverged and pin the ones that
+          must stay consistent.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {types.map((type) => {
+          const meta = TYPE_META[type.id] || {
+            icon: "📄",
+            color: "slate",
+            description: "",
+            gradient: "from-slate-600/20 to-slate-900/10",
+          };
+          return (
+            <button
+              key={type.id}
+              onClick={() => onSelectType(type)}
+              className={`group text-left bg-gradient-to-br ${meta.gradient} border ${
+                colorMap[meta.color] || ""
+              } rounded-xl p-5 transition-all duration-200 hover:shadow-lg`}
+            >
+              <div className="flex items-start gap-4">
+                <div
+                  className={`w-12 h-12 rounded-lg ${
+                    iconBg[meta.color] || "bg-slate-800"
+                  } flex items-center justify-center text-2xl shrink-0`}
+                >
+                  {meta.icon}
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-base font-semibold text-white group-hover:text-cyan-300 transition">
+                    {type.label}
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                    {meta.description}
+                  </p>
+                  <span className="inline-block mt-3 text-xs text-slate-600 group-hover:text-slate-400 transition">
+                    Select profiles to compare →
+                  </span>
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
