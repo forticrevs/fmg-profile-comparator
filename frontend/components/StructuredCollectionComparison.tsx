@@ -198,11 +198,11 @@ export default function StructuredCollectionComparison({
         </div>
       </div>
 
-      <div className="overflow-x-auto pb-1">
+      <div className="pb-1">
         <div
-          className="grid min-w-max gap-4"
+          className="grid gap-4"
           style={{
-            gridTemplateColumns: `repeat(${profileNames.length}, minmax(340px, 1fr))`,
+            gridTemplateColumns: `repeat(${profileNames.length}, minmax(0, 1fr))`,
           }}
         >
           {profileNames.map((name) => {

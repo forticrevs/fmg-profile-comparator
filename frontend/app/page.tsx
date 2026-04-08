@@ -98,7 +98,7 @@ export default function Home() {
     <main className="min-h-screen bg-slate-950 text-white">
       {/* Header */}
       <header className="border-b border-slate-800 px-6 py-4">
-        <div className="max-w-[1400px] mx-auto flex items-center gap-4">
+        <div className="w-full flex items-center gap-4">
           <div
             className="flex items-center gap-3 cursor-pointer"
             onClick={() => {
@@ -188,7 +188,7 @@ export default function Home() {
         </div>
       </header>
 
-      <div className="max-w-[1400px] mx-auto px-6 py-6">
+      <div className="w-full px-6 py-6">
         {/* Error */}
         {error && (
           <div className="mb-6 bg-red-950/50 border border-red-800 rounded-xl p-4 text-red-300 flex items-center justify-between">

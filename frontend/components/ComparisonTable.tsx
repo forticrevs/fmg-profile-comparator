@@ -314,20 +314,19 @@ export default function ComparisonTable({
           return (
             <td
               key={name}
-              className="px-2 py-1 align-top"
+              className="px-2 py-1 align-top overflow-hidden"
               title={fv.tooltip}
             >
               <span
                 className={
                   field.values[name] === "__MISSING__"
-                    ? "block whitespace-pre-wrap break-words text-slate-600 italic"
+                    ? "block whitespace-pre-wrap break-all text-slate-600 italic"
                     : fv.resolved
-                    ? "block whitespace-pre-wrap break-words text-cyan-300"
+                    ? "block whitespace-pre-wrap break-all text-cyan-300"
                     : field.in_sync
-                    ? "block whitespace-pre-wrap break-words text-slate-400"
-                    : "block whitespace-pre-wrap break-words text-slate-200"
+                    ? "block whitespace-pre-wrap break-all text-slate-400"
+                    : "block whitespace-pre-wrap break-all text-slate-200"
                 }
-                style={{ maxWidth: "22rem" }}
               >
                 {fv.text}
               </span>
@@ -459,11 +458,11 @@ export default function ComparisonTable({
       </div>
 
       {/* Table */}
-      <div className="overflow-x-auto border border-slate-700/50 rounded-lg">
+      <div className="overflow-hidden border border-slate-700/50 rounded-lg">
         <table className="w-full text-sm table-fixed">
           <colgroup>
             <col style={{ width: 36 }} />
-            <col style={{ width: "22%" }} />
+            <col style={{ width: "18%" }} />
             {profileNames.map((n) => (
               <col key={n} />
             ))}
