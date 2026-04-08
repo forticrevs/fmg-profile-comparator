@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import ProfileDashboard from "@/components/ProfileDashboard";
 import ProfilePicker from "@/components/ProfilePicker";
 import ComparisonTable from "@/components/ComparisonTable";
+import { useAuth } from "@/components/AuthGuard";
 import {
   fetchProfileTypes,
   fetchProfiles,
@@ -16,6 +18,8 @@ import {
 type View = "dashboard" | "picker" | "comparison";
 
 export default function Home() {
+  const { username, logout: doLogout } = useAuth();
+  const router = useRouter();
   const [view, setView] = useState<View>("dashboard");
   const [types, setTypes] = useState<ProfileType[]>([]);
   const [selectedType, setSelectedType] = useState<ProfileType | null>(null);
@@ -29,6 +33,8 @@ export default function Home() {
     profileType: string;
     profileNames: string[];
     fields: ComparisonField[];
+    collectionKeys: string[];
+    rawProfiles: Record<string, Record<string, unknown>>;
   } | null>(null);
   const [pins, setPins] = useState<string[]>([]);
 
@@ -65,6 +71,8 @@ export default function Home() {
         profileType: comparison.profile_type,
         profileNames: comparison.profile_names,
         fields: comparison.fields,
+        collectionKeys: comparison.collection_keys,
+        rawProfiles: comparison.raw_profiles,
       });
       setPins(currentPins);
     } catch (e) {
@@ -151,6 +159,32 @@ export default function Home() {
               )}
             </nav>
           )}
+
+          {/* Right side: nav + user */}
+          <div className="ml-auto flex items-center gap-4">
+            <nav className="flex items-center gap-3 text-xs">
+              <button
+                onClick={() => router.push("/reference/application-signatures")}
+                className="text-slate-500 hover:text-cyan-400 transition"
+              >
+                App Signatures
+              </button>
+              <button
+                onClick={() => router.push("/reference/ips-signatures")}
+                className="text-slate-500 hover:text-cyan-400 transition"
+              >
+                IPS Signatures
+              </button>
+            </nav>
+            <div className="h-4 w-px bg-slate-800" />
+            <span className="text-xs text-slate-500">{username}</span>
+            <button
+              onClick={doLogout}
+              className="text-xs text-slate-600 hover:text-red-400 transition"
+            >
+              Sign Out
+            </button>
+          </div>
         </div>
       </header>
 
@@ -216,6 +250,8 @@ export default function Home() {
             profileType={result.profileType}
             profileNames={result.profileNames}
             fields={result.fields}
+            collectionKeys={result.collectionKeys}
+            rawProfiles={result.rawProfiles}
             pinnedFields={pins}
             onPinsChange={setPins}
           />

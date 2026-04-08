@@ -1,4 +1,6 @@
-from pydantic_settings import BaseSettings
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -8,9 +10,14 @@ class Settings(BaseSettings):
     fmg_adom: str = "root"
     fmg_verify_ssl: bool = False
 
-    class Config:
-        env_file = ".env"
-        env_prefix = "FMG_"
+    model_config = SettingsConfigDict(
+        env_file=(
+            Path(__file__).resolve().parents[1] / ".env",
+            Path.cwd() / ".env",
+        ),
+        env_prefix="FMG_",
+        extra="ignore",
+    )
 
 
 settings = Settings()

@@ -5,21 +5,15 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import profiles
-from app.services.fmg_client import fmg
+from app.routers import profiles, reference, auth
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: login to FMG
-    try:
-        await fmg.login()
-    except Exception as exc:
-        import logging
-        logging.warning(f"FMG login failed at startup (will retry on requests): {exc}")
     yield
-    # Shutdown: logout
-    await fmg.logout()
+    # Shutdown: cleanup any expired sessions
+    from app.services.auth import cleanup_expired
+    await cleanup_expired()
 
 
 app = FastAPI(
@@ -30,12 +24,14 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001", "http://localhost:3002", "http://127.0.0.1:3000"],
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
 app.include_router(profiles.router)
+app.include_router(reference.router)
 
 
 @app.get("/api/health")

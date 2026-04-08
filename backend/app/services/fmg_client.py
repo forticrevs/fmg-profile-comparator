@@ -14,23 +14,56 @@ logger = logging.getLogger(__name__)
 class FMGClient:
     """Thin async wrapper around FortiManager JSON-RPC API."""
 
-    def __init__(self) -> None:
-        self._base = f"https://{settings.fmg_host}/jsonrpc"
+    def __init__(self, host: str | None = None, verify_ssl: bool | None = None) -> None:
+        self._host = host or settings.fmg_host
+        self._verify = verify_ssl if verify_ssl is not None else settings.fmg_verify_ssl
+        self._base = f"https://{self._host}/jsonrpc"
         self._session: str | None = None
-        self._http = httpx.AsyncClient(verify=settings.fmg_verify_ssl, timeout=30.0)
+        self._http = httpx.AsyncClient(verify=self._verify, timeout=30.0)
         self._req_id = 1
+        self._adom = settings.fmg_adom
+
+    def _is_login_request(self, method: str, params: list[dict[str, Any]]) -> bool:
+        if method != "exec":
+            return False
+        return any(param.get("url") == "/sys/login/user" for param in params)
+
+    def _is_logout_request(self, method: str, params: list[dict[str, Any]]) -> bool:
+        if method != "exec":
+            return False
+        return any(param.get("url") == "/sys/logout" for param in params)
+
+    async def _ensure_session(self) -> None:
+        if not self._session:
+            await self.login()
+
+    def _is_session_error(self, code: int, message: str) -> bool:
+        message_lower = message.lower()
+        return "session" in message_lower or "login" in message_lower or code == -11
 
     # ------------------------------------------------------------------
     # Low-level JSON-RPC
     # ------------------------------------------------------------------
 
-    async def _call(self, method: str, params: list[dict[str, Any]]) -> Any:
+    async def _call(
+        self,
+        method: str,
+        params: list[dict[str, Any]],
+        *,
+        verbose: bool = False,
+        retry_on_session_error: bool = True,
+    ) -> Any:
+        if not self._is_login_request(method, params) and not self._is_logout_request(method, params):
+            await self._ensure_session()
+
         payload: dict[str, Any] = {
             "method": method,
             "params": params,
             "id": self._req_id,
             "jsonrpc": "1.0",
         }
+        if verbose:
+            payload["verbose"] = 1
         if self._session:
             payload["session"] = self._session
         self._req_id += 1
@@ -43,10 +76,22 @@ class FMGClient:
         if isinstance(result, list) and len(result) == 1:
             entry = result[0]
             status = entry.get("status", {})
-            if status.get("code", -1) != 0:
+            code = status.get("code", -1)
+            message = status.get("message", "unknown")
+            if code != 0:
+                if retry_on_session_error and self._is_session_error(code, message):
+                    logger.info("FMG session expired or missing; retrying login")
+                    self._session = None
+                    await self.login()
+                    return await self._call(
+                        method,
+                        params,
+                        verbose=verbose,
+                        retry_on_session_error=False,
+                    )
                 raise RuntimeError(
-                    f"FMG API error: {status.get('message', 'unknown')} "
-                    f"(code {status.get('code')})"
+                    f"FMG API error: {message} "
+                    f"(code {code})"
                 )
             return entry.get("data", entry)
         return result
@@ -56,16 +101,22 @@ class FMGClient:
     # ------------------------------------------------------------------
 
     async def login(self) -> None:
-        if not settings.fmg_host:
+        if not self._host:
             raise RuntimeError("FMG_HOST not configured")
+        await self.login_with_credentials(settings.fmg_username, settings.fmg_password)
+
+    async def login_with_credentials(self, username: str, password: str) -> None:
+        """Authenticate to FMG with explicit credentials."""
+        if not self._host:
+            raise RuntimeError("FMG host not configured")
         payload = {
             "method": "exec",
             "params": [
                 {
                     "url": "/sys/login/user",
                     "data": {
-                        "user": settings.fmg_username,
-                        "passwd": settings.fmg_password,
+                        "user": username,
+                        "passwd": password,
                     },
                 }
             ],
@@ -112,7 +163,7 @@ class FMGClient:
         url_tpl = self.PROFILE_URLS.get(profile_type)
         if not url_tpl:
             raise ValueError(f"Unknown profile type: {profile_type}")
-        url = url_tpl.format(adom=settings.fmg_adom)
+        url = url_tpl.format(adom=self._adom)
         data = await self._call("get", [{"url": url, "fields": ["name"]}])
         if isinstance(data, list):
             return [item.get("name", "") for item in data if isinstance(item, dict)]
@@ -128,8 +179,8 @@ class FMGClient:
         url_tpl = self.PROFILE_URLS.get(profile_type)
         if not url_tpl:
             raise ValueError(f"Unknown profile type: {profile_type}")
-        url = f"{url_tpl.format(adom=settings.fmg_adom)}/{name}"
-        data = await self._call("get", [{"url": url}])
+        url = f"{url_tpl.format(adom=self._adom)}/{name}"
+        data = await self._call("get", [{"url": url}], verbose=True)
         if isinstance(data, dict):
             return data
         if isinstance(data, list) and len(data) == 1:
@@ -142,8 +193,8 @@ class FMGClient:
 
     async def _get_webfilter(self, name: str) -> dict[str, Any]:
         """Get a webfilter profile with enriched URL filter entries."""
-        url = f"/pm/config/adom/{settings.fmg_adom}/obj/webfilter/profile/{name}"
-        data = await self._call("get", [{"url": url}])
+        url = f"/pm/config/adom/{self._adom}/obj/webfilter/profile/{name}"
+        data = await self._call("get", [{"url": url}], verbose=True)
         result: dict[str, Any] = {}
         if isinstance(data, dict):
             result = data
@@ -166,12 +217,12 @@ class FMGClient:
             if urlfilter_id:
                 try:
                     uf_url = (
-                        f"/pm/config/adom/{settings.fmg_adom}"
+                        f"/pm/config/adom/{self._adom}"
                         f"/obj/webfilter/urlfilter/{urlfilter_id}"
                     )
                     uf_data = await self._call("get", [{
                         "url": uf_url, "option": ["loadsub"]
-                    }])
+                    }], verbose=True)
                     if isinstance(uf_data, dict):
                         result["_url_filter"] = uf_data
                     elif isinstance(uf_data, list) and uf_data:
@@ -182,12 +233,12 @@ class FMGClient:
         # Fetch web rating overrides for this ADOM
         try:
             rating_url = (
-                f"/pm/config/adom/{settings.fmg_adom}"
+                f"/pm/config/adom/{self._adom}"
                 f"/obj/webfilter/ftgd-local-rating"
             )
             rating_data = await self._call("get", [{
                 "url": rating_url, "fields": ["url", "rating", "status", "comment"]
-            }])
+            }], verbose=True)
             if isinstance(rating_data, list) and rating_data:
                 result["_web_rating_overrides"] = rating_data
         except Exception:
@@ -200,7 +251,7 @@ class FMGClient:
     # ------------------------------------------------------------------
 
     async def _list_sdwan(self) -> list[str]:
-        url = self.SDWAN_LIST_URL.format(adom=settings.fmg_adom)
+        url = self.SDWAN_LIST_URL.format(adom=self._adom)
         data = await self._call("get", [{"url": url, "fields": ["name"]}])
         if isinstance(data, list):
             return [item.get("name", "") for item in data if isinstance(item, dict)]
@@ -212,8 +263,8 @@ class FMGClient:
         Fetches the parent sdwan object (includes health-check, service, zone
         as nested children via loadsub).
         """
-        url = self.SDWAN_DETAIL_URL.format(adom=settings.fmg_adom, name=name)
-        data = await self._call("get", [{"url": url}])
+        url = self.SDWAN_DETAIL_URL.format(adom=self._adom, name=name)
+        data = await self._call("get", [{"url": url}], verbose=True)
 
         # Also fetch service rules and health checks explicitly for richer data
         result: dict[str, Any] = {}
@@ -228,7 +279,11 @@ class FMGClient:
         for sub in ("service", "health-check", "zone", "members"):
             if sub not in result or not result[sub]:
                 try:
-                    sub_data = await self._call("get", [{"url": f"{url}/{sub}"}])
+                    sub_data = await self._call(
+                        "get",
+                        [{"url": f"{url}/{sub}"}],
+                        verbose=True,
+                    )
                     result[sub] = sub_data
                 except Exception:
                     pass
@@ -236,6 +291,24 @@ class FMGClient:
         # Add template name for clarity
         result["_template_name"] = name
         return result
+
+    async def list_application_signatures(self) -> list[dict[str, Any]]:
+        """Return the global application signature catalog."""
+        data = await self._call(
+            "get",
+            [{"url": "/pm/config/global/_application/list"}],
+            verbose=True,
+        )
+        return data if isinstance(data, list) else []
+
+    async def list_ips_signatures(self) -> list[dict[str, Any]]:
+        """Return the ADOM-scoped IPS signature catalog."""
+        data = await self._call(
+            "get",
+            [{"url": f"/pm/config/adom/{self._adom}/_rule/list"}],
+            verbose=True,
+        )
+        return data if isinstance(data, list) else []
 
 
 # Singleton

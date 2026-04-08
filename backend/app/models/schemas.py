@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Any
 
 
@@ -30,6 +30,8 @@ class ComparisonResponse(BaseModel):
     profile_type: str
     profile_names: list[str]
     fields: list[ComparisonField]
+    collection_keys: list[str] = Field(default_factory=list)
+    raw_profiles: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class PinToggleRequest(BaseModel):
@@ -43,3 +45,10 @@ class PinnedFieldsResponse(BaseModel):
     """Current set of pinned fields for a profile type."""
     profile_type: str
     pinned_fields: list[str]
+
+
+class ReferenceListResponse(BaseModel):
+    """A searchable reference dataset fetched from FortiManager."""
+    reference_type: str
+    count: int
+    items: list[dict[str, Any]]

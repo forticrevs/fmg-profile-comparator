@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import { ProfileType } from "@/lib/api";
 
 interface Props {
@@ -109,6 +111,37 @@ export default function ProfileDashboard({ types, onSelectType }: Props) {
             </button>
           );
         })}
+      </div>
+
+      <div className="space-y-3">
+        <div>
+          <h3 className="text-lg font-semibold text-white">Reference Catalogs</h3>
+          <p className="text-sm text-slate-500">
+            Search the full application and IPS signature catalogs that drive profile entries.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Link
+            href="/reference/application-signatures"
+            className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 transition-all duration-200 hover:border-cyan-700 hover:bg-slate-900"
+          >
+            <h4 className="text-base font-semibold text-white">Application Signatures</h4>
+            <p className="mt-2 text-sm text-slate-500">
+              Browse every application signature returned by FMG, with global search and column filters.
+            </p>
+          </Link>
+
+          <Link
+            href="/reference/ips-signatures"
+            className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 transition-all duration-200 hover:border-cyan-700 hover:bg-slate-900"
+          >
+            <h4 className="text-base font-semibold text-white">IPS Signatures</h4>
+            <p className="mt-2 text-sm text-slate-500">
+              Inspect the FortiManager IPS rule catalog and use it as a reference during comparison work.
+            </p>
+          </Link>
+        </div>
       </div>
     </div>
   );

@@ -4,9 +4,10 @@ Caches lookup tables fetched from FMG at startup / on first use.
 Covers:
   - WebFilter FortiGuard categories (id -> "Drug Abuse", etc.)
   - WebFilter local/custom categories (id -> "custom1", etc.)
+  - Application signatures (id -> "126.Mail", etc.)
   - Application Control categories (id -> "General.Interest", etc.)
-  - URL filter lists (id -> name, plus entries)
-  - IPS rules (signature IDs -> name via sensor entries)
+  - URL filter lists (id -> name)
+  - IPS rules (signature IDs -> name)
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ class IDResolver:
     def __init__(self) -> None:
         self._webfilter_cats: dict[str, str] = {}     # "1" -> "Drug Abuse"
         self._webfilter_local_cats: dict[str, str] = {}  # "140" -> "custom1"
+        self._applications: dict[str, str] = {}       # "16554" -> "126.Mail"
         self._app_categories: dict[str, str] = {}     # "12" -> "General.Interest"
         self._url_filters: dict[str, str] = {}         # "2" -> "ACME-URL"
         self._ips_rules: dict[str, str] = {}           # "51006" -> "Apache.Log4j..."
@@ -44,6 +46,11 @@ class IDResolver:
             logger.warning(f"Failed to load app categories: {e}")
 
         try:
+            await self._load_applications(fmg)
+        except Exception as e:
+            logger.warning(f"Failed to load applications: {e}")
+
+        try:
             await self._load_url_filters(fmg)
         except Exception as e:
             logger.warning(f"Failed to load URL filters: {e}")
@@ -57,6 +64,7 @@ class IDResolver:
         logger.info(
             f"ID resolver loaded: {len(self._webfilter_cats)} wf cats, "
             f"{len(self._webfilter_local_cats)} local cats, "
+            f"{len(self._applications)} apps, "
             f"{len(self._app_categories)} app cats, "
             f"{len(self._url_filters)} url filters, "
             f"{len(self._ips_rules)} ips rules"
@@ -64,13 +72,11 @@ class IDResolver:
 
     async def _load_webfilter_categories(self, fmg: Any) -> None:
         """Fetch FortiGuard + local webfilter categories via datasrc."""
-        from app.config import settings
-
         data = await fmg._call("get", [{
             "attr": "ftgd-wf/filters/category",
             "option": "datasrc",
-            "url": f"/pm/config/adom/{settings.fmg_adom}/obj/webfilter/profile",
-        }])
+            "url": f"/pm/config/adom/{fmg._adom}/obj/webfilter/profile",
+        }], verbose=True)
 
         if isinstance(data, dict):
             # FortiGuard categories
@@ -89,13 +95,11 @@ class IDResolver:
 
     async def _load_app_categories(self, fmg: Any) -> None:
         """Fetch application categories via datasrc."""
-        from app.config import settings
-
         data = await fmg._call("get", [{
             "attr": "entries/category",
             "option": "datasrc",
-            "url": f"/pm/config/adom/{settings.fmg_adom}/obj/application/list",
-        }])
+            "url": f"/pm/config/adom/{fmg._adom}/obj/application/list",
+        }], verbose=True)
 
         if isinstance(data, dict):
             for cat in data.get("application categories", []):
@@ -104,14 +108,25 @@ class IDResolver:
                 if cat_id and desc:
                     self._app_categories[cat_id] = desc
 
+    async def _load_applications(self, fmg: Any) -> None:
+        """Fetch the global application signature catalog."""
+        data = await fmg.list_application_signatures()
+
+        if isinstance(data, list):
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                app_id = str(item.get("id", ""))
+                name = item.get("name", "")
+                if app_id and name:
+                    self._applications[app_id] = name
+
     async def _load_url_filters(self, fmg: Any) -> None:
         """Fetch URL filter list names."""
-        from app.config import settings
-
         data = await fmg._call("get", [{
-            "url": f"/pm/config/adom/{settings.fmg_adom}/obj/webfilter/urlfilter",
+            "url": f"/pm/config/adom/{fmg._adom}/obj/webfilter/urlfilter",
             "fields": ["id", "name"],
-        }])
+        }], verbose=True)
 
         if isinstance(data, list):
             for item in data:
@@ -122,66 +137,18 @@ class IDResolver:
                         self._url_filters[fid] = name
 
     async def _load_ips_rules(self, fmg: Any) -> None:
-        """Fetch IPS signature rule-id -> name mapping via FortiGate proxy.
+        """Fetch IPS signature rule-id -> name mapping from FortiManager."""
+        data = await fmg.list_ips_signatures()
 
-        The IPS signature DB lives on managed FortiGates, not in FMG config.
-        We proxy through the first available device to get the full rule table.
-        """
-        # Find a managed device to proxy through
-        try:
-            devices = await fmg._call("get", [{
-                "url": "/dvmdb/device",
-                "fields": ["name"],
-                "range": [0, 1],
-            }])
-        except Exception:
-            logger.warning("Cannot list devices for IPS rule lookup")
-            return
-
-        if not isinstance(devices, list) or not devices:
-            logger.warning("No managed devices available for IPS rule lookup")
-            return
-
-        device_name = devices[0].get("name", "")
-        if not device_name:
-            return
-
-        # Fetch the full IPS rule DB via proxy (rule-id + name only)
-        try:
-            data = await fmg._call("exec", [{
-                "url": "/sys/proxy/json",
-                "data": {
-                    "target": [f"device/{device_name}"],
-                    "action": "get",
-                    "resource": "/api/v2/cmdb/ips/rule?format=rule-id|name&count=15000",
-                },
-            }])
-        except Exception as e:
-            logger.warning(f"IPS rule proxy call failed: {e}")
-            return
-
-        # Response is a list: [{"response": {"results": [...]}, "target": "..."}]
-        if isinstance(data, list) and data:
-            resp = data[0] if isinstance(data[0], dict) else {}
-            inner = resp.get("response", {})
-            results = inner.get("results", [])
-            for item in results:
+        if isinstance(data, list):
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
                 rid = str(item.get("rule-id", ""))
                 name = item.get("name", "")
                 if rid and name:
                     self._ips_rules[rid] = name
-            logger.info(
-                f"Loaded {len(self._ips_rules)} IPS rules from device '{device_name}'"
-            )
-        elif isinstance(data, dict):
-            # Single device response (not wrapped in list)
-            resp = data.get("response", {})
-            results = resp.get("results", [])
-            for item in results:
-                rid = str(item.get("rule-id", ""))
-                name = item.get("name", "")
-                if rid and name:
-                    self._ips_rules[rid] = name
+            logger.info("Loaded %s IPS rules from FortiManager", len(self._ips_rules))
 
     # ------------------------------------------------------------------
     # Resolution methods
@@ -196,6 +163,10 @@ class IDResolver:
         """Resolve an application category ID to its name."""
         return self._app_categories.get(str(cat_id))
 
+    def resolve_application(self, app_id: str | int) -> str | None:
+        """Resolve an application ID to its signature name."""
+        return self._applications.get(str(app_id))
+
     def resolve_url_filter(self, filter_id: str | int) -> str | None:
         """Resolve a URL filter list ID to its name."""
         return self._url_filters.get(str(filter_id))
@@ -203,6 +174,23 @@ class IDResolver:
     def resolve_ips_rule(self, rule_id: str | int) -> str | None:
         """Resolve an IPS signature rule ID to its name."""
         return self._ips_rules.get(str(rule_id))
+
+    def enrich_object(self, value: Any, field_path: str = "") -> Any:
+        """Recursively resolve leaf values inside nested profile payloads."""
+        if isinstance(value, dict):
+            return {
+                key: self.enrich_object(
+                    child,
+                    f"{field_path}.{key}" if field_path else key,
+                )
+                for key, child in value.items()
+            }
+        if isinstance(value, list):
+            return [
+                self.enrich_object(child, f"{field_path}[{index}]")
+                for index, child in enumerate(value)
+            ]
+        return self.resolve_value(field_path, value)
 
     def resolve_value(self, field_path: str, value: Any) -> Any:
         """Auto-resolve a value based on the field path context.
@@ -215,14 +203,21 @@ class IDResolver:
 
         path_lower = field_path.lower()
         resolved = None
+        leaf = path_lower.rsplit(".", 1)[-1]
 
         # WebFilter category fields: ftgd-wf.filters[N].category[M]
         if "category" in path_lower and ("ftgd-wf" in path_lower or "filters" in path_lower):
             resolved = self.resolve_webfilter_category(value)
 
         # Application category fields
-        elif "category" in path_lower and ("application" in path_lower or "entries" in path_lower):
+        elif ("category" in path_lower or "cat-id" in path_lower) and (
+            "application" in path_lower or "entries" in path_lower
+        ):
             resolved = self.resolve_app_category(value)
+
+        # Application signature IDs in application control profiles
+        elif ".application[" in path_lower or leaf == "application":
+            resolved = self.resolve_application(value)
 
         # URL filter reference (web.urlfilter-table or similar)
         elif "urlfilter-table" in path_lower or (

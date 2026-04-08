@@ -41,15 +41,43 @@ def _is_excluded(key: str) -> bool:
     return leaf in EXCLUDED_FIELDS
 
 
+def _is_object_collection(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) > 0
+        and all(isinstance(item, dict) for item in value)
+    )
+
+
+def find_collection_keys(profiles: dict[str, dict[str, Any]]) -> list[str]:
+    """Return top-level collection keys that are better rendered structurally."""
+    keys: set[str] = set()
+    for profile in profiles.values():
+        if not isinstance(profile, dict):
+            continue
+        for key, value in profile.items():
+            if _is_object_collection(value):
+                keys.add(key)
+    return sorted(keys)
+
+
+def _belongs_to_collection(key: str, collection_roots: set[str]) -> bool:
+    root = key.split(".", 1)[0].split("[", 1)[0]
+    return root in collection_roots
+
+
 def compare_profiles(
     profiles: dict[str, dict[str, Any]],
     resolver: Any = None,
+    excluded_roots: list[str] | None = None,
 ) -> list[ComparisonField]:
     """Compare N flattened profiles, returning one ComparisonField per unique key.
 
     If a resolver is provided, values are enriched with human-readable names
     where applicable (category IDs, URL filter IDs, etc.).
     """
+    collection_roots = set(excluded_roots or [])
+
     # Flatten all
     flat: dict[str, dict[str, Any]] = {}
     for name, data in profiles.items():
@@ -58,7 +86,11 @@ def compare_profiles(
     # Collect all unique keys, excluding internal IDs
     all_keys: set[str] = set()
     for f in flat.values():
-        all_keys.update(k for k in f.keys() if not _is_excluded(k))
+        all_keys.update(
+            k
+            for k in f.keys()
+            if not _is_excluded(k) and not _belongs_to_collection(k, collection_roots)
+        )
 
     fields: list[ComparisonField] = []
     for key in sorted(all_keys):

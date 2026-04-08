@@ -2,11 +2,14 @@
 
 import { useState, useMemo } from "react";
 import { ComparisonField, togglePin } from "@/lib/api";
+import StructuredCollectionComparison from "@/components/StructuredCollectionComparison";
 
 interface Props {
   profileType: string;
   profileNames: string[];
   fields: ComparisonField[];
+  collectionKeys: string[];
+  rawProfiles: Record<string, Record<string, unknown>>;
   pinnedFields: string[];
   onPinsChange: (pins: string[]) => void;
 }
@@ -198,6 +201,8 @@ export default function ComparisonTable({
   profileType,
   profileNames,
   fields,
+  collectionKeys,
+  rawProfiles,
   pinnedFields,
   onPinsChange,
 }: Props) {
@@ -298,7 +303,7 @@ export default function ComparisonTable({
           </button>
         </td>
         <td
-          className="px-2 py-1 text-slate-400 text-xs font-mono truncate"
+          className="px-2 py-1 text-slate-400 text-xs font-mono break-words"
           style={{ paddingLeft: 8 + depth * 16 }}
           title={field.field_path}
         >
@@ -309,19 +314,20 @@ export default function ComparisonTable({
           return (
             <td
               key={name}
-              className="px-2 py-1 font-mono text-xs truncate max-w-0"
+              className="px-2 py-1 align-top"
               title={fv.tooltip}
             >
               <span
                 className={
                   field.values[name] === "__MISSING__"
-                    ? "text-slate-600 italic"
+                    ? "block whitespace-pre-wrap break-words text-slate-600 italic"
                     : fv.resolved
-                    ? "text-cyan-300"
+                    ? "block whitespace-pre-wrap break-words text-cyan-300"
                     : field.in_sync
-                    ? "text-slate-500"
-                    : "text-slate-200"
+                    ? "block whitespace-pre-wrap break-words text-slate-400"
+                    : "block whitespace-pre-wrap break-words text-slate-200"
                 }
+                style={{ maxWidth: "22rem" }}
               >
                 {fv.text}
               </span>
@@ -385,6 +391,15 @@ export default function ComparisonTable({
 
   return (
     <div className="space-y-3">
+      {collectionKeys.map((collectionKey) => (
+        <StructuredCollectionComparison
+          key={collectionKey}
+          collectionKey={collectionKey}
+          profileNames={profileNames}
+          rawProfiles={rawProfiles}
+        />
+      ))}
+
       {/* Stats Bar */}
       <div className="flex items-center gap-4 text-sm">
         <span className="text-slate-400 tabular-nums">
@@ -465,7 +480,7 @@ export default function ComparisonTable({
               {profileNames.map((name) => (
                 <th
                   key={name}
-                  className="px-2 py-2 text-slate-600 font-medium text-[11px] text-left font-mono truncate"
+                  className="px-2 py-2 text-slate-600 font-medium text-[11px] text-left font-mono break-words"
                   title={name}
                 >
                   {name}

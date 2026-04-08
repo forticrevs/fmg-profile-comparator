@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Any
 
 from app.models.schemas import (
@@ -12,8 +12,9 @@ from app.models.schemas import (
     ProfileDetail,
     ProfileListResponse,
 )
-from app.services.fmg_client import fmg
-from app.services.comparator import compare_profiles
+from app.dependencies import get_current_fmg
+from app.services.fmg_client import FMGClient
+from app.services.comparator import compare_profiles, find_collection_keys
 from app.services.id_resolver import resolver
 from app.services import pin_store
 
@@ -27,10 +28,10 @@ def _validate_type(profile_type: str) -> None:
         raise HTTPException(400, f"Invalid profile_type. Must be one of: {VALID_TYPES}")
 
 
-async def _ensure_resolver() -> None:
+async def _ensure_resolver(fmg_client: FMGClient) -> None:
     """Lazy-load the resolver on first use."""
     if not resolver._loaded:
-        await resolver.load(fmg)
+        await resolver.load(fmg_client)
 
 
 # ------------------------------------------------------------------
@@ -55,25 +56,37 @@ async def get_profile_types() -> list[dict[str, str]]:
 async def compare(
     profile_type: str,
     names: list[str] = Query(..., alias="name"),
+    fmg_client: FMGClient = Depends(get_current_fmg),
 ) -> ComparisonResponse:
     _validate_type(profile_type)
     if len(names) < 2:
         raise HTTPException(400, "Need at least 2 profiles to compare")
 
-    await _ensure_resolver()
+    await _ensure_resolver(fmg_client)
 
     profiles: dict[str, dict[str, Any]] = {}
     for n in names:
         try:
-            profiles[n] = await fmg.get_profile(profile_type, n)
+            profiles[n] = await fmg_client.get_profile(profile_type, n)
         except Exception as exc:
             raise HTTPException(502, f"FMG error fetching '{n}': {exc}")
 
-    fields = compare_profiles(profiles, resolver=resolver)
+    collection_keys = find_collection_keys(profiles)
+    fields = compare_profiles(
+        profiles,
+        resolver=resolver,
+        excluded_roots=collection_keys,
+    )
+    enriched_profiles = {
+        name: resolver.enrich_object(profile)
+        for name, profile in profiles.items()
+    }
     return ComparisonResponse(
         profile_type=profile_type,
         profile_names=names,
         fields=fields,
+        collection_keys=collection_keys,
+        raw_profiles=enriched_profiles,
     )
 
 
@@ -105,10 +118,13 @@ async def toggle_pin(profile_type: str, body: PinToggleRequest) -> PinnedFieldsR
 # ------------------------------------------------------------------
 
 @router.get("/{profile_type}")
-async def list_profiles(profile_type: str) -> ProfileListResponse:
+async def list_profiles(
+    profile_type: str,
+    fmg_client: FMGClient = Depends(get_current_fmg),
+) -> ProfileListResponse:
     _validate_type(profile_type)
     try:
-        names = await fmg.list_profiles(profile_type)
+        names = await fmg_client.list_profiles(profile_type)
     except Exception as exc:
         raise HTTPException(502, f"FMG error: {exc}")
     return ProfileListResponse(profile_type=profile_type, profiles=names)
@@ -119,10 +135,14 @@ async def list_profiles(profile_type: str) -> ProfileListResponse:
 # ------------------------------------------------------------------
 
 @router.get("/{profile_type}/{name}")
-async def get_profile(profile_type: str, name: str) -> ProfileDetail:
+async def get_profile(
+    profile_type: str,
+    name: str,
+    fmg_client: FMGClient = Depends(get_current_fmg),
+) -> ProfileDetail:
     _validate_type(profile_type)
     try:
-        data = await fmg.get_profile(profile_type, name)
+        data = await fmg_client.get_profile(profile_type, name)
     except Exception as exc:
         raise HTTPException(502, f"FMG error: {exc}")
     return ProfileDetail(name=name, profile_type=profile_type, data=data)
