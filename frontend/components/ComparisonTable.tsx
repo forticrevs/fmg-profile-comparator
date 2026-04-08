@@ -158,12 +158,36 @@ function SyncBadge({ sync, diff }: { sync: number; diff: number }) {
   );
 }
 
-function formatValue(v: unknown): string {
-  if (v === "__MISSING__") return "—";
-  if (v === null || v === undefined) return "null";
-  if (typeof v === "boolean") return v ? "true" : "false";
-  if (typeof v === "object") return JSON.stringify(v);
-  return String(v);
+interface ResolvedValue {
+  raw: unknown;
+  display: string;
+}
+
+function isResolved(v: unknown): v is ResolvedValue {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    "raw" in v &&
+    "display" in v
+  );
+}
+
+function formatValue(v: unknown): { text: string; tooltip: string; resolved: boolean } {
+  if (v === "__MISSING__") return { text: "—", tooltip: "Not present", resolved: false };
+  if (v === null || v === undefined) return { text: "null", tooltip: "null", resolved: false };
+  if (isResolved(v)) {
+    return {
+      text: `${v.display}`,
+      tooltip: `${v.display} (raw: ${v.raw})`,
+      resolved: true,
+    };
+  }
+  if (typeof v === "boolean") return { text: v ? "true" : "false", tooltip: String(v), resolved: false };
+  if (typeof v === "object") {
+    const s = JSON.stringify(v);
+    return { text: s, tooltip: s, resolved: false };
+  }
+  return { text: String(v), tooltip: String(v), resolved: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -280,25 +304,30 @@ export default function ComparisonTable({
         >
           {shortPath}
         </td>
-        {profileNames.map((name) => (
-          <td
-            key={name}
-            className="px-2 py-1 font-mono text-xs truncate max-w-0"
-            title={formatValue(field.values[name])}
-          >
-            <span
-              className={
-                field.values[name] === "__MISSING__"
-                  ? "text-slate-600 italic"
-                  : field.in_sync
-                  ? "text-slate-500"
-                  : "text-slate-200"
-              }
+        {profileNames.map((name) => {
+          const fv = formatValue(field.values[name]);
+          return (
+            <td
+              key={name}
+              className="px-2 py-1 font-mono text-xs truncate max-w-0"
+              title={fv.tooltip}
             >
-              {formatValue(field.values[name])}
-            </span>
-          </td>
-        ))}
+              <span
+                className={
+                  field.values[name] === "__MISSING__"
+                    ? "text-slate-600 italic"
+                    : fv.resolved
+                    ? "text-cyan-300"
+                    : field.in_sync
+                    ? "text-slate-500"
+                    : "text-slate-200"
+                }
+              >
+                {fv.text}
+              </span>
+            </td>
+          );
+        })}
         <td className="px-2 py-1 text-center w-14">
           {isDrift ? (
             <span className="text-red-400 text-[10px] font-bold">DRIFT</span>

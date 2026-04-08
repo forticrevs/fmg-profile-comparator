@@ -1,3 +1,6 @@
 {
-  "application": []
+  "application": [],
+  "webfilter": [
+    "web.bword-threshold"
+  ]
 }

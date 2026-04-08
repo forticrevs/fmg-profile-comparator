@@ -14,6 +14,7 @@ from app.models.schemas import (
 )
 from app.services.fmg_client import fmg
 from app.services.comparator import compare_profiles
+from app.services.id_resolver import resolver
 from app.services import pin_store
 
 router = APIRouter(prefix="/api/profiles", tags=["profiles"])
@@ -24,6 +25,12 @@ VALID_TYPES = {"application", "webfilter", "ips", "sdwan"}
 def _validate_type(profile_type: str) -> None:
     if profile_type not in VALID_TYPES:
         raise HTTPException(400, f"Invalid profile_type. Must be one of: {VALID_TYPES}")
+
+
+async def _ensure_resolver() -> None:
+    """Lazy-load the resolver on first use."""
+    if not resolver._loaded:
+        await resolver.load(fmg)
 
 
 # ------------------------------------------------------------------
@@ -53,6 +60,8 @@ async def compare(
     if len(names) < 2:
         raise HTTPException(400, "Need at least 2 profiles to compare")
 
+    await _ensure_resolver()
+
     profiles: dict[str, dict[str, Any]] = {}
     for n in names:
         try:
@@ -60,7 +69,7 @@ async def compare(
         except Exception as exc:
             raise HTTPException(502, f"FMG error fetching '{n}': {exc}")
 
-    fields = compare_profiles(profiles)
+    fields = compare_profiles(profiles, resolver=resolver)
     return ComparisonResponse(
         profile_type=profile_type,
         profile_names=names,

@@ -43,8 +43,13 @@ def _is_excluded(key: str) -> bool:
 
 def compare_profiles(
     profiles: dict[str, dict[str, Any]],
+    resolver: Any = None,
 ) -> list[ComparisonField]:
-    """Compare N flattened profiles, returning one ComparisonField per unique key."""
+    """Compare N flattened profiles, returning one ComparisonField per unique key.
+
+    If a resolver is provided, values are enriched with human-readable names
+    where applicable (category IDs, URL filter IDs, etc.).
+    """
     # Flatten all
     flat: dict[str, dict[str, Any]] = {}
     for name, data in profiles.items():
@@ -57,12 +62,22 @@ def compare_profiles(
 
     fields: list[ComparisonField] = []
     for key in sorted(all_keys):
-        values = {}
+        values: dict[str, Any] = {}
         for pname, fdata in flat.items():
-            values[pname] = fdata.get(key, "__MISSING__")
+            raw = fdata.get(key, "__MISSING__")
+            if resolver and raw != "__MISSING__":
+                values[pname] = resolver.resolve_value(key, raw)
+            else:
+                values[pname] = raw
 
-        unique_vals = set(str(v) for v in values.values())
-        in_sync = len(unique_vals) == 1
+        # For sync comparison, extract raw values (ignore display wrappers)
+        raw_vals = set()
+        for v in values.values():
+            if isinstance(v, dict) and "raw" in v:
+                raw_vals.add(str(v["raw"]))
+            else:
+                raw_vals.add(str(v))
+        in_sync = len(raw_vals) == 1
 
         fields.append(
             ComparisonField(

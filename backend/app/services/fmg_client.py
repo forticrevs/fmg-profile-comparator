@@ -122,6 +122,8 @@ class FMGClient:
         """Return full configuration for one profile."""
         if profile_type == "sdwan":
             return await self._get_sdwan(name)
+        if profile_type == "webfilter":
+            return await self._get_webfilter(name)
 
         url_tpl = self.PROFILE_URLS.get(profile_type)
         if not url_tpl:
@@ -133,6 +135,65 @@ class FMGClient:
         if isinstance(data, list) and len(data) == 1:
             return data[0]
         return {"_raw": data}
+
+    # ------------------------------------------------------------------
+    # WebFilter enrichment — resolve URL filter table references
+    # ------------------------------------------------------------------
+
+    async def _get_webfilter(self, name: str) -> dict[str, Any]:
+        """Get a webfilter profile with enriched URL filter entries."""
+        url = f"/pm/config/adom/{settings.fmg_adom}/obj/webfilter/profile/{name}"
+        data = await self._call("get", [{"url": url}])
+        result: dict[str, Any] = {}
+        if isinstance(data, dict):
+            result = data
+        elif isinstance(data, list) and len(data) == 1:
+            result = data[0]
+        else:
+            return {"_raw": data}
+
+        # Resolve URL filter table reference to include actual URL entries
+        # The web profile references a urlfilter table by ID in web.urlfilter-table
+        web_block = result.get("web", {})
+        if isinstance(web_block, dict):
+            urlfilter_ref = web_block.get("urlfilter-table")
+            # Value may be an int, string, or list like ['2']
+            urlfilter_id = None
+            if isinstance(urlfilter_ref, list) and urlfilter_ref:
+                urlfilter_id = urlfilter_ref[0]
+            elif urlfilter_ref:
+                urlfilter_id = urlfilter_ref
+            if urlfilter_id:
+                try:
+                    uf_url = (
+                        f"/pm/config/adom/{settings.fmg_adom}"
+                        f"/obj/webfilter/urlfilter/{urlfilter_id}"
+                    )
+                    uf_data = await self._call("get", [{
+                        "url": uf_url, "option": ["loadsub"]
+                    }])
+                    if isinstance(uf_data, dict):
+                        result["_url_filter"] = uf_data
+                    elif isinstance(uf_data, list) and uf_data:
+                        result["_url_filter"] = uf_data[0]
+                except Exception:
+                    pass
+
+        # Fetch web rating overrides for this ADOM
+        try:
+            rating_url = (
+                f"/pm/config/adom/{settings.fmg_adom}"
+                f"/obj/webfilter/ftgd-local-rating"
+            )
+            rating_data = await self._call("get", [{
+                "url": rating_url, "fields": ["url", "rating", "status", "comment"]
+            }])
+            if isinstance(rating_data, list) and rating_data:
+                result["_web_rating_overrides"] = rating_data
+        except Exception:
+            pass
+
+        return result
 
     # ------------------------------------------------------------------
     # SD-WAN template helpers
