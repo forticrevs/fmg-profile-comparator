@@ -1,6 +1,7 @@
 {
   "application": [],
   "webfilter": [
+    "_url_filter.entries[0].action",
     "web.bword-threshold"
   ]
 }

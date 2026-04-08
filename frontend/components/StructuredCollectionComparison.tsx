@@ -1,52 +1,33 @@
 "use client";
 
+import { useMemo, useState, useEffect } from "react";
+
 interface Props {
   collectionKey: string;
   profileNames: string[];
   rawProfiles: Record<string, Record<string, unknown>>;
+  defaults?: Record<string, unknown>;
 }
 
 type CollectionEntry = Record<string, unknown>;
-type ResolvedValue = {
-  raw: unknown;
-  display: string;
-};
+type ResolvedValue = { raw: unknown; display: string };
 
 const HIDDEN_ENTRY_KEYS = new Set(["oid", "obj seq", "last-modified"]);
 const ENTRY_KEY_PRIORITY = [
-  "action",
-  "status",
-  "severity",
-  "location",
-  "protocol",
-  "application",
-  "rule",
-  "cve",
-  "default-action",
-  "default-status",
-  "log",
-  "log-attack-context",
-  "log-packet",
-  "quarantine",
-  "quarantine-expiry",
-  "rate-mode",
-  "rate-count",
-  "rate-duration",
+  "action", "status", "severity", "location", "protocol",
+  "application", "rule", "cve", "default-action", "default-status",
+  "log", "log-attack-context", "log-packet", "quarantine",
+  "quarantine-expiry", "rate-mode", "rate-count", "rate-duration",
 ];
 
+type FilterMode = "all" | "differs" | "in_sync";
+
 function humanizeKey(value: string): string {
-  return value
-    .replace(/[_-]/g, " ")
-    .replace(/\b\w/g, (char) => char.toUpperCase());
+  return value.replace(/[_-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function isResolvedValue(value: unknown): value is ResolvedValue {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "raw" in value &&
-    "display" in value
-  );
+  return typeof value === "object" && value !== null && "raw" in value && "display" in value;
 }
 
 function formatValue(value: unknown): string {
@@ -54,137 +35,355 @@ function formatValue(value: unknown): string {
   if (isResolvedValue(value)) return value.display;
   if (Array.isArray(value)) {
     if (value.length === 0) return "—";
-    return value.map((item) => formatValue(item)).join(", ");
+    return value.map(formatValue).join(", ");
   }
   if (typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>).filter(
       ([key]) => !HIDDEN_ENTRY_KEYS.has(key)
     );
     if (entries.length === 0) return "—";
-    return entries
-      .map(([key, item]) => `${humanizeKey(key)}: ${formatValue(item)}`)
-      .join(" | ");
+    return entries.map(([key, item]) => `${humanizeKey(key)}: ${formatValue(item)}`).join(" | ");
   }
   return String(value);
 }
 
+function normalizeForCompare(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (isResolvedValue(value)) return String(value.raw);
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
 function isObjectCollection(value: unknown): value is CollectionEntry[] {
-  return (
-    Array.isArray(value) &&
-    value.every((item) => typeof item === "object" && item !== null)
-  );
+  return Array.isArray(value) && value.every((item) => typeof item === "object" && item !== null);
 }
 
 function getCollectionEntries(
   rawProfiles: Record<string, Record<string, unknown>>,
   profileName: string,
-  collectionKey: string
+  collectionKey: string,
 ): CollectionEntry[] {
   const value = rawProfiles[profileName]?.[collectionKey];
   return isObjectCollection(value) ? value : [];
 }
 
-function summarizeEntry(entry: CollectionEntry, index: number): string {
-  const id = typeof entry.id === "number" || typeof entry.id === "string"
-    ? `Entry ${entry.id}`
-    : `Entry ${index + 1}`;
-
-  const tokens: string[] = [];
-  const append = (label: string, value: unknown) => {
-    const text = formatValue(value);
-    if (text !== "—" && text !== "all") {
-      tokens.push(`${label} ${text}`);
-    }
-  };
-
-  append("Rule", entry.rule);
-  append("CVE", entry.cve);
-  append("Severity", entry.severity);
-  append("Location", entry.location);
-  append("Protocol", entry.protocol);
-  append("App", entry.application);
-
-  return tokens.length > 0 ? `${id} · ${tokens.slice(0, 2).join(" · ")}` : id;
-}
-
 function sortEntryKeys(keys: string[]): string[] {
   return [...keys].sort((left, right) => {
-    const leftIndex = ENTRY_KEY_PRIORITY.indexOf(left);
-    const rightIndex = ENTRY_KEY_PRIORITY.indexOf(right);
-
-    if (leftIndex !== -1 || rightIndex !== -1) {
-      if (leftIndex === -1) return 1;
-      if (rightIndex === -1) return -1;
-      return leftIndex - rightIndex;
+    const li = ENTRY_KEY_PRIORITY.indexOf(left);
+    const ri = ENTRY_KEY_PRIORITY.indexOf(right);
+    if (li !== -1 || ri !== -1) {
+      if (li === -1) return 1;
+      if (ri === -1) return -1;
+      return li - ri;
     }
-
     return left.localeCompare(right);
   });
 }
 
-function EntryCard({
-  entry,
-  index,
+function entryMatchKey(entry: CollectionEntry): string {
+  if (entry.id !== undefined && entry.id !== null) return `id:${entry.id}`;
+  if (typeof entry.name === "string") return `name:${entry.name}`;
+  if (entry.rule !== undefined) return `rule:${normalizeForCompare(entry.rule)}`;
+  return "";
+}
+
+interface MatchedRow {
+  matchKey: string;
+  label: string;
+  entries: (CollectionEntry | null)[];
+}
+
+function matchEntries(
+  profileNames: string[],
+  rawProfiles: Record<string, Record<string, unknown>>,
+  collectionKey: string,
+): MatchedRow[] {
+  const profileMaps: Map<string, CollectionEntry>[] = profileNames.map((name) => {
+    const entries = getCollectionEntries(rawProfiles, name, collectionKey);
+    const m = new Map<string, CollectionEntry>();
+    entries.forEach((e, i) => {
+      const key = entryMatchKey(e) || `pos:${i}`;
+      m.set(key, e);
+    });
+    return m;
+  });
+
+  const seen = new Set<string>();
+  const orderedKeys: string[] = [];
+  for (const map of profileMaps) {
+    for (const key of map.keys()) {
+      if (!seen.has(key)) {
+        seen.add(key);
+        orderedKeys.push(key);
+      }
+    }
+  }
+
+  return orderedKeys.map((matchKey) => {
+    const entries = profileMaps.map((m) => m.get(matchKey) ?? null);
+    const first = entries.find((e) => e !== null)!;
+    const id = first.id;
+    let label = typeof id === "number" || typeof id === "string" ? `Entry ${id}` : matchKey;
+    if (first.name && typeof first.name === "string") label = first.name;
+    return { matchKey, label, entries };
+  });
+}
+
+function isDefaultValue(
+  key: string,
+  value: unknown,
+  defaults: Record<string, unknown> | undefined,
+): boolean {
+  if (!defaults) return false;
+  const defVal = defaults[key];
+  if (defVal === undefined) return false;
+  return normalizeForCompare(value) === normalizeForCompare(defVal);
+}
+
+// ---------------------------------------------------------------------------
+// Row component
+// ---------------------------------------------------------------------------
+
+function MatchedEntryRow({
+  row,
+  profileNames,
+  hideDefaults,
+  defaults,
+  forceExpanded,
 }: {
-  entry: CollectionEntry;
-  index: number;
+  row: MatchedRow;
+  profileNames: string[];
+  hideDefaults: boolean;
+  defaults?: Record<string, unknown>;
+  forceExpanded?: boolean;
 }) {
-  const keys = sortEntryKeys(
-    Object.keys(entry).filter((key) => !HIDDEN_ENTRY_KEYS.has(key))
-  );
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    if (forceExpanded !== undefined) setExpanded(forceExpanded);
+  }, [forceExpanded]);
+
+  const allKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const entry of row.entries) {
+      if (entry) Object.keys(entry).filter((k) => !HIDDEN_ENTRY_KEYS.has(k)).forEach((k) => keys.add(k));
+    }
+    return sortEntryKeys([...keys]);
+  }, [row.entries]);
+
+  const fieldDiffs = useMemo(() => {
+    const result: Record<string, { differs: boolean }> = {};
+    for (const key of allKeys) {
+      const vals = row.entries.map((e) => (e ? normalizeForCompare(e[key]) : ""));
+      const nonMissing = vals.filter((v) => v !== "");
+      const differs =
+        new Set(nonMissing).size > 1 ||
+        (vals.some((v) => v === "") && nonMissing.length > 0);
+      result[key] = { differs };
+    }
+    return result;
+  }, [allKeys, row.entries]);
+
+  const diffCount = Object.values(fieldDiffs).filter((d) => d.differs).length;
+  const allPresent = row.entries.every((e) => e !== null);
+  const missingCount = row.entries.filter((e) => e === null).length;
+
+  const visibleKeys = useMemo(() => {
+    if (!hideDefaults) return allKeys;
+    return allKeys.filter((key) =>
+      row.entries.some((entry) => {
+        if (!entry) return true;
+        return !isDefaultValue(key, entry[key], defaults);
+      }),
+    );
+  }, [allKeys, hideDefaults, defaults, row.entries]);
 
   return (
-    <article className="rounded-xl border border-slate-800 bg-slate-950/80 shadow-sm shadow-black/20">
-      <header className="border-b border-slate-800 px-4 py-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h4 className="truncate text-sm font-semibold text-slate-100">
-              {summarizeEntry(entry, index)}
-            </h4>
-            <p className="mt-1 text-[11px] text-slate-500">
-              {typeof entry.id === "number" || typeof entry.id === "string"
-                ? `FMG entry ID ${entry.id}`
-                : `Position ${index + 1}`}
-            </p>
-          </div>
-          {typeof entry.status === "string" && (
-            <span className="rounded-full border border-emerald-900/60 bg-emerald-950/40 px-2 py-1 text-[10px] uppercase tracking-wide text-emerald-300">
-              {String(entry.status)}
+    <div
+      className={`rounded-xl border overflow-hidden ${
+        diffCount > 0
+          ? "border-amber-900/50 bg-slate-900/60"
+          : "border-slate-800 bg-slate-900/40"
+      }`}
+    >
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-slate-800/40 transition"
+      >
+        <span className="text-slate-600 text-[10px] w-3">
+          {expanded ? "▼" : "▶"}
+        </span>
+        <span className="text-sm font-semibold text-slate-100 min-w-0 truncate">
+          {row.label}
+        </span>
+        <div className="ml-auto flex items-center gap-2">
+          {!allPresent && (
+            <span className="rounded-full border border-red-900/60 bg-red-950/40 px-2 py-0.5 text-[10px] text-red-300">
+              {missingCount} missing
+            </span>
+          )}
+          {diffCount > 0 ? (
+            <span className="rounded-full border border-amber-900/60 bg-amber-950/40 px-2 py-0.5 text-[10px] text-amber-300 font-semibold">
+              {diffCount} differ{diffCount !== 1 ? "s" : ""}
+            </span>
+          ) : (
+            <span className="rounded-full border border-emerald-900/60 bg-emerald-950/40 px-2 py-0.5 text-[10px] text-emerald-300">
+              ✓ In sync
             </span>
           )}
         </div>
-      </header>
+      </button>
 
-      <div className="divide-y divide-slate-900">
-        {keys.map((key) => (
-          <div key={key} className="grid grid-cols-[140px_minmax(0,1fr)] gap-3 px-4 py-2.5">
-            <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500">
-              {humanizeKey(key)}
-            </div>
-            <div className="text-sm text-slate-200 break-words">
-              {formatValue(entry[key])}
-            </div>
-          </div>
-        ))}
-      </div>
-    </article>
+      {expanded && (
+        <div className="border-t border-slate-800">
+          <table className="w-full text-sm table-fixed">
+            <colgroup>
+              <col style={{ width: "15%" }} />
+              {profileNames.map((n) => (
+                <col key={n} />
+              ))}
+            </colgroup>
+            <thead>
+              <tr className="bg-slate-950/80 border-b border-slate-800">
+                <th className="px-3 py-2 text-left text-[11px] font-medium text-slate-500 uppercase">
+                  Field
+                </th>
+                {profileNames.map((name) => (
+                  <th
+                    key={name}
+                    className="px-3 py-2 text-left text-[11px] font-medium text-slate-500 font-mono break-all"
+                  >
+                    {name}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {visibleKeys.map((key) => {
+                const diff = fieldDiffs[key];
+                return (
+                  <tr
+                    key={key}
+                    className={
+                      diff.differs
+                        ? "bg-amber-950/20 border-t border-amber-900/30"
+                        : "border-t border-slate-800/40"
+                    }
+                  >
+                    <td className="px-3 py-2 text-xs font-mono text-slate-400 break-all align-top">
+                      {key}
+                      {diff.differs && (
+                        <span className="ml-1 text-amber-400 text-[10px]">≠</span>
+                      )}
+                    </td>
+                    {row.entries.map((entry, i) => {
+                      const val = entry ? entry[key] : undefined;
+                      const formatted = entry ? formatValue(val) : "—";
+                      const isMissing = !entry;
+                      const isFieldDefault =
+                        !!entry && isDefaultValue(key, val, defaults);
+                      return (
+                        <td key={profileNames[i]} className="px-3 py-2 align-top">
+                          <span
+                            className={`block whitespace-pre-wrap break-all text-xs ${
+                              isMissing
+                                ? "text-slate-600 italic"
+                                : diff.differs
+                                ? "text-slate-100 font-medium"
+                                : isFieldDefault
+                                ? "text-slate-600"
+                                : "text-slate-400"
+                            }`}
+                          >
+                            {formatted}
+                            {isFieldDefault && (
+                              <span className="ml-1 text-[10px] text-slate-700">
+                                (default)
+                              </span>
+                            )}
+                          </span>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+              {visibleKeys.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={profileNames.length + 1}
+                    className="px-4 py-6 text-center text-slate-600 text-sm"
+                  >
+                    {hideDefaults
+                      ? "All fields are at default values."
+                      : "No fields found."}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
 
 export default function StructuredCollectionComparison({
   collectionKey,
   profileNames,
   rawProfiles,
+  defaults,
 }: Props) {
+  const [filter, setFilter] = useState<FilterMode>("all");
+  const [hideDefaults, setHideDefaults] = useState(false);
+  const [expandState, setExpandState] = useState<boolean | undefined>(undefined);
+
   const label = humanizeKey(collectionKey);
-  const totalEntries = profileNames.reduce(
-    (count, name) => count + getCollectionEntries(rawProfiles, name, collectionKey).length,
-    0
+
+  const matchedRows = useMemo(
+    () => matchEntries(profileNames, rawProfiles, collectionKey),
+    [profileNames, rawProfiles, collectionKey],
   );
 
-  if (totalEntries === 0) {
-    return null;
-  }
+  const rowsWithCounts = useMemo(() => {
+    return matchedRows.map((row) => {
+      const allKeys = new Set<string>();
+      for (const entry of row.entries) {
+        if (entry)
+          Object.keys(entry)
+            .filter((k) => !HIDDEN_ENTRY_KEYS.has(k))
+            .forEach((k) => allKeys.add(k));
+      }
+      let diffCount = 0;
+      for (const key of allKeys) {
+        const vals = row.entries.map((e) => (e ? normalizeForCompare(e[key]) : ""));
+        const nonMissing = vals.filter((v) => v !== "");
+        if (
+          new Set(nonMissing).size > 1 ||
+          (vals.some((v) => v === "") && nonMissing.length > 0)
+        ) {
+          diffCount++;
+        }
+      }
+      return { row, diffCount };
+    });
+  }, [matchedRows]);
+
+  const totalEntries = matchedRows.length;
+  const diffEntries = rowsWithCounts.filter((r) => r.diffCount > 0).length;
+  const syncEntries = totalEntries - diffEntries;
+
+  const filteredRows = useMemo(() => {
+    if (filter === "differs") return rowsWithCounts.filter((r) => r.diffCount > 0);
+    if (filter === "in_sync") return rowsWithCounts.filter((r) => r.diffCount === 0);
+    return rowsWithCounts;
+  }, [rowsWithCounts, filter]);
+
+  if (totalEntries === 0) return null;
 
   return (
     <section className="space-y-3">
@@ -192,57 +391,87 @@ export default function StructuredCollectionComparison({
         <div>
           <h3 className="text-base font-semibold text-white">{label}</h3>
           <p className="text-sm text-slate-500">
-            Compare each profile&apos;s {collectionKey} collection side by side using the
-            verbose FMG payload.
+            {totalEntries} matched entries across {profileNames.length} profiles
+            {diffEntries > 0 && (
+              <span className="text-amber-400 ml-2">
+                · {diffEntries} with differences
+              </span>
+            )}
+            {syncEntries > 0 && (
+              <span className="text-emerald-400 ml-2">
+                · {syncEntries} in sync
+              </span>
+            )}
           </p>
         </div>
       </div>
 
-      <div className="pb-1">
-        <div
-          className="grid gap-4"
-          style={{
-            gridTemplateColumns: `repeat(${profileNames.length}, minmax(0, 1fr))`,
-          }}
-        >
-          {profileNames.map((name) => {
-            const entries = getCollectionEntries(rawProfiles, name, collectionKey);
+      <div className="flex items-center gap-2 flex-wrap">
+        {(
+          [
+            ["all", "All"],
+            ["differs", "Differs"],
+            ["in_sync", "In Sync"],
+          ] as [FilterMode, string][]
+        ).map(([mode, lbl]) => (
+          <button
+            key={mode}
+            onClick={() => setFilter(mode)}
+            className={`px-2.5 py-0.5 rounded-full text-xs font-medium transition ${
+              filter === mode
+                ? "bg-cyan-600 text-white"
+                : "bg-slate-800 text-slate-500 hover:text-white"
+            }`}
+          >
+            {lbl}
+          </button>
+        ))}
 
-            return (
-              <div
-                key={name}
-                className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4"
-              >
-                <div className="mb-4 flex items-center justify-between gap-3 border-b border-slate-800 pb-3">
-                  <div className="min-w-0">
-                    <h4 className="truncate font-mono text-sm text-slate-100" title={name}>
-                      {name}
-                    </h4>
-                    <p className="text-[11px] text-slate-500">
-                      {entries.length} {collectionKey}
-                    </p>
-                  </div>
-                </div>
+        <div className="h-4 w-px bg-slate-800 mx-1" />
 
-                {entries.length > 0 ? (
-                  <div className="space-y-3">
-                    {entries.map((entry, index) => (
-                      <EntryCard
-                        key={`${name}-${collectionKey}-${index}`}
-                        entry={entry}
-                        index={index}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <div className="rounded-xl border border-dashed border-slate-800 bg-slate-950/50 px-4 py-6 text-center text-sm text-slate-500">
-                    No {collectionKey} found for this profile.
-                  </div>
-                )}
-              </div>
-            );
-          })}
+        <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={hideDefaults}
+            onChange={(e) => setHideDefaults(e.target.checked)}
+            className="rounded border-slate-700 bg-slate-900 text-cyan-600 focus:ring-cyan-600 focus:ring-offset-0 h-3.5 w-3.5"
+          />
+          Hide defaults
+        </label>
+
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={() => setExpandState(true)}
+            className="text-[11px] text-slate-600 hover:text-slate-300 transition"
+          >
+            Expand All
+          </button>
+          <span className="text-slate-800">|</span>
+          <button
+            onClick={() => setExpandState(false)}
+            className="text-[11px] text-slate-600 hover:text-slate-300 transition"
+          >
+            Collapse All
+          </button>
         </div>
+      </div>
+
+      <div className="space-y-2">
+        {filteredRows.map(({ row }) => (
+          <MatchedEntryRow
+            key={row.matchKey}
+            row={row}
+            profileNames={profileNames}
+            hideDefaults={hideDefaults}
+            defaults={defaults}
+            forceExpanded={expandState}
+          />
+        ))}
+        {filteredRows.length === 0 && (
+          <div className="rounded-xl border border-dashed border-slate-800 bg-slate-950/50 px-4 py-6 text-center text-sm text-slate-500">
+            No entries match the current filter.
+          </div>
+        )}
       </div>
     </section>
   );

@@ -32,6 +32,7 @@ class ComparisonResponse(BaseModel):
     fields: list[ComparisonField]
     collection_keys: list[str] = Field(default_factory=list)
     raw_profiles: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    defaults: dict[str, Any] = Field(default_factory=dict)
 
 
 class PinToggleRequest(BaseModel):

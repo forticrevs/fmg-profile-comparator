@@ -12,6 +12,7 @@ interface Props {
   rawProfiles: Record<string, Record<string, unknown>>;
   pinnedFields: string[];
   onPinsChange: (pins: string[]) => void;
+  defaults?: Record<string, unknown>;
 }
 
 type FilterMode = "all" | "in_sync" | "differs" | "pinned";
@@ -205,6 +206,7 @@ export default function ComparisonTable({
   rawProfiles,
   pinnedFields,
   onPinsChange,
+  defaults,
 }: Props) {
   const [filter, setFilter] = useState<FilterMode>("all");
   const [search, setSearch] = useState("");
@@ -396,6 +398,7 @@ export default function ComparisonTable({
           collectionKey={collectionKey}
           profileNames={profileNames}
           rawProfiles={rawProfiles}
+          defaults={defaults}
         />
       ))}
 

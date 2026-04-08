@@ -35,6 +35,7 @@ export default function Home() {
     fields: ComparisonField[];
     collectionKeys: string[];
     rawProfiles: Record<string, Record<string, unknown>>;
+    defaults: Record<string, unknown>;
   } | null>(null);
   const [pins, setPins] = useState<string[]>([]);
 
@@ -73,6 +74,7 @@ export default function Home() {
         fields: comparison.fields,
         collectionKeys: comparison.collection_keys,
         rawProfiles: comparison.raw_profiles,
+        defaults: comparison.defaults ?? {},
       });
       setPins(currentPins);
     } catch (e) {
@@ -254,6 +256,7 @@ export default function Home() {
             rawProfiles={result.rawProfiles}
             pinnedFields={pins}
             onPinsChange={setPins}
+            defaults={result.defaults}
           />
         )}
       </div>

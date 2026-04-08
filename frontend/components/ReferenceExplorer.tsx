@@ -12,6 +12,8 @@ import {
 type ReferenceKind = "application-signatures" | "ips-signatures";
 type FilterOperator = "contains" | "not_contains" | "equals" | "regex";
 
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 250, 500];
+
 interface Props {
   kind: ReferenceKind;
   title: string;
@@ -77,6 +79,8 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [filters, setFilters] = useState<FilterRule[]>([]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
 
   useEffect(() => {
     let cancelled = false;
@@ -144,6 +148,16 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
     });
   }, [data, deferredSearch, filters]);
 
+  // Reset to page 1 when filters/search change
+  useEffect(() => { setPage(1); }, [deferredSearch, filters]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const paginatedItems = useMemo(
+    () => filteredItems.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [filteredItems, safePage, pageSize],
+  );
+
   const addFilter = (column?: string) => {
     const defaultColumn = column ?? columns[0];
     if (!defaultColumn) return;
@@ -196,7 +210,7 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
             </button>
 
             <div className="ml-auto text-sm text-slate-500">
-              Showing {filteredItems.length} of {data?.count ?? 0}
+              Showing {paginatedItems.length} of {filteredItems.length} (total {data?.count ?? 0})
             </div>
           </div>
 
@@ -281,6 +295,7 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
           {loading ? (
             <div className="py-16 text-center text-slate-500">Loading reference data…</div>
           ) : (
+            <>
             <div className="overflow-x-auto rounded-xl border border-slate-800">
               <table className="min-w-full table-fixed border-collapse">
                 <thead className="sticky top-0 bg-slate-950">
@@ -305,8 +320,8 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredItems.map((item, index) => (
-                    <tr key={`${kind}-${index}`} className="border-b border-slate-900 align-top">
+                  {paginatedItems.map((item, index) => (
+                    <tr key={`${kind}-${(safePage - 1) * pageSize + index}`} className="border-b border-slate-900 align-top">
                       {columns.map((column) => (
                         <td key={column} className="px-3 py-2.5 align-top">
                           <div className="max-w-[22rem] whitespace-pre-wrap break-words text-xs leading-5 text-slate-200">
@@ -317,7 +332,7 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
                     </tr>
                   ))}
 
-                  {filteredItems.length === 0 && (
+                  {paginatedItems.length === 0 && (
                     <tr>
                       <td
                         colSpan={Math.max(columns.length, 1)}
@@ -330,6 +345,61 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
                 </tbody>
               </table>
             </div>
+
+            {/* Pagination controls */}
+            <div className="flex items-center justify-between gap-4 pt-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-500">Rows per page:</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+                  className="rounded-lg border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-white outline-none"
+                >
+                  {PAGE_SIZE_OPTIONS.map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setPage(1)}
+                  disabled={safePage <= 1}
+                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-400 transition hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  ««
+                </button>
+                <button
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={safePage <= 1}
+                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-400 transition hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  ‹ Prev
+                </button>
+                <span className="text-xs text-slate-400 tabular-nums">
+                  Page {safePage} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={safePage >= totalPages}
+                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-400 transition hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  Next ›
+                </button>
+                <button
+                  onClick={() => setPage(totalPages)}
+                  disabled={safePage >= totalPages}
+                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-400 transition hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  »»
+                </button>
+              </div>
+
+              <div className="text-xs text-slate-500 tabular-nums">
+                {(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, filteredItems.length)} of {filteredItems.length}
+              </div>
+            </div>
+            </>
           )}
         </div>
       </div>

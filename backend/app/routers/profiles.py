@@ -81,12 +81,17 @@ async def compare(
         name: resolver.enrich_object(profile)
         for name, profile in profiles.items()
     }
+
+    # Fetch default values for this profile type (for hide-defaults feature)
+    defaults = await fmg_client.get_profile_defaults(profile_type)
+
     return ComparisonResponse(
         profile_type=profile_type,
         profile_names=names,
         fields=fields,
         collection_keys=collection_keys,
         raw_profiles=enriched_profiles,
+        defaults=defaults,
     )
 
 

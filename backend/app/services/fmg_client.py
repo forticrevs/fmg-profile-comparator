@@ -310,6 +310,24 @@ class FMGClient:
         )
         return data if isinstance(data, list) else []
 
+    async def get_profile_defaults(self, profile_type: str) -> dict[str, Any]:
+        """Fetch the default field values for a profile type using FMG syntax API."""
+        url_tpl = self.PROFILE_URLS.get(profile_type)
+        if not url_tpl:
+            return {}
+        url = url_tpl.format(adom=self._adom)
+        try:
+            data = await self._call(
+                "get",
+                [{"url": url, "option": "syntax", "data": {"flag": "default"}}],
+                verbose=True,
+            )
+            if isinstance(data, dict):
+                return data
+        except Exception as e:
+            logger.warning(f"Failed to fetch defaults for {profile_type}: {e}")
+        return {}
+
 
 # Singleton
 fmg = FMGClient()

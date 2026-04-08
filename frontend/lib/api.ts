@@ -101,6 +101,7 @@ export interface ComparisonResponse {
   fields: ComparisonField[];
   collection_keys: string[];
   raw_profiles: Record<string, Record<string, unknown>>;
+  defaults: Record<string, unknown>;
 }
 
 export interface PinnedFieldsResponse {
