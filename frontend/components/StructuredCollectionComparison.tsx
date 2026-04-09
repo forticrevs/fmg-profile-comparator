@@ -2,6 +2,9 @@
 
 import { useMemo, useState, useEffect } from "react";
 import ActionBadge, { isActionKey } from "@/components/ActionBadge";
+import FieldVisibilityMenu, {
+  loadHiddenFields,
+} from "@/components/FieldVisibilityMenu";
 
 /* ------------------------------------------------------------------ */
 /* Fade-in animation style (injected once)                             */
@@ -419,11 +422,13 @@ function MatchedEntryRow({
   row,
   profileNames,
   hideDefaults,
+  hiddenColumns,
   defaults,
   forceExpanded,
 }: {
   row: MatchedRow;
   profileNames: string[];
+  hiddenColumns: Set<string>;
   hideDefaults: boolean;
   defaults?: Record<string, unknown>;
   forceExpanded?: boolean;
@@ -460,14 +465,20 @@ function MatchedEntryRow({
   const missingCount = row.entries.filter((e) => e === null).length;
 
   const visibleKeys = useMemo(() => {
-    if (!hideDefaults) return allKeys;
-    return allKeys.filter((key) =>
-      row.entries.some((entry) => {
-        if (!entry) return true;
-        return !isDefaultValue(key, entry[key], defaults);
-      }),
-    );
-  }, [allKeys, hideDefaults, defaults, row.entries]);
+    let keys = allKeys;
+    if (hiddenColumns.size > 0) {
+      keys = keys.filter((k) => !hiddenColumns.has(k));
+    }
+    if (hideDefaults) {
+      keys = keys.filter((key) =>
+        row.entries.some((entry) => {
+          if (!entry) return true;
+          return !isDefaultValue(key, entry[key], defaults);
+        }),
+      );
+    }
+    return keys;
+  }, [allKeys, hideDefaults, hiddenColumns, defaults, row.entries]);
 
   return (
     <div
@@ -632,6 +643,14 @@ export default function StructuredCollectionComparison({
   const [expandState, setExpandState] = useState<boolean | undefined>(undefined);
   const [matchByUrl, setMatchByUrl] = useState(true);
 
+  // Per-collection column visibility (persisted in localStorage). Tracks
+  // *hidden* entry-key names so newly-discovered keys default to visible.
+  const visibilityKey = `scc:${collectionKey}`;
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    setHiddenColumns(loadHiddenFields(visibilityKey));
+  }, [visibilityKey]);
+
   const label = humanizeKey(collectionKey);
 
   const hasUrlEntries = useMemo(
@@ -661,6 +680,21 @@ export default function StructuredCollectionComparison({
     () => matchEntries(profileNames, rawProfiles, collectionKey, matchByUrl),
     [profileNames, rawProfiles, collectionKey, matchByUrl],
   );
+
+  // Discover every entry-key across every matched entry — this is the
+  // schema we offer to the user in the field-visibility menu.
+  const availableColumns = useMemo(() => {
+    const seen = new Set<string>();
+    for (const row of matchedRows) {
+      for (const entry of row.entries) {
+        if (!entry) continue;
+        for (const k of Object.keys(entry)) {
+          if (!HIDDEN_ENTRY_KEYS.has(k)) seen.add(k);
+        }
+      }
+    }
+    return [...seen];
+  }, [matchedRows]);
 
   const rowsWithCounts = useMemo(() => {
     return matchedRows.map((row) => {
@@ -767,6 +801,15 @@ export default function StructuredCollectionComparison({
           </>
         )}
 
+        <FieldVisibilityMenu
+          storageKey={visibilityKey}
+          available={availableColumns}
+          hidden={hiddenColumns}
+          onChange={setHiddenColumns}
+          labelOf={(f) => humanizeKey(f)}
+          buttonLabel="Columns"
+        />
+
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={() => setExpandState(true)}
@@ -791,6 +834,7 @@ export default function StructuredCollectionComparison({
             row={row}
             profileNames={profileNames}
             hideDefaults={hideDefaults}
+            hiddenColumns={hiddenColumns}
             defaults={entryDefaults}
             forceExpanded={expandState}
           />

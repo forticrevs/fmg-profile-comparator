@@ -19,6 +19,9 @@ import {
   ReferenceListResponse,
 } from "@/lib/api";
 import SharedActionBadge from "@/components/ActionBadge";
+import FieldVisibilityMenu, {
+  loadHiddenFields,
+} from "@/components/FieldVisibilityMenu";
 
 type ReferenceKind =
   | "application-signatures"
@@ -433,11 +436,21 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
     return [...keys];
   }, [data]);
 
-  // Use user-ordered columns if set, otherwise detected
-  const columns = useMemo(
-    () => columnOrder ?? detectedColumns,
-    [columnOrder, detectedColumns],
-  );
+  // Per-reference column visibility (persisted to localStorage). Tracks
+  // *hidden* column names so newly-discovered columns default to visible.
+  const visibilityKey = `ref:${kind}`;
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    setHiddenColumns(loadHiddenFields(visibilityKey));
+  }, [visibilityKey]);
+
+  // Use user-ordered columns if set, otherwise detected; then drop any
+  // columns the user has hidden via the visibility menu.
+  const columns = useMemo(() => {
+    const ordered = columnOrder ?? detectedColumns;
+    if (hiddenColumns.size === 0) return ordered;
+    return ordered.filter((c) => !hiddenColumns.has(c));
+  }, [columnOrder, detectedColumns, hiddenColumns]);
 
   // Sync detected columns into column order when data first loads
   useEffect(() => {
@@ -584,6 +597,14 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
             >
               Add Column Filter
             </button>
+
+            <FieldVisibilityMenu
+              storageKey={visibilityKey}
+              available={detectedColumns}
+              hidden={hiddenColumns}
+              onChange={setHiddenColumns}
+              buttonLabel="Columns"
+            />
 
             <div className="ml-auto text-sm text-slate-500">
               Showing {paginatedItems.length} of {filteredItems.length}{" "}

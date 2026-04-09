@@ -1,9 +1,12 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { ComparisonField, togglePin } from "@/lib/api";
 import StructuredCollectionComparison from "@/components/StructuredCollectionComparison";
 import ActionBadge, { isActionKey } from "@/components/ActionBadge";
+import FieldVisibilityMenu, {
+  loadHiddenFields,
+} from "@/components/FieldVisibilityMenu";
 
 interface Props {
   profileType: string;
@@ -168,6 +171,18 @@ interface ResolvedValue {
   display: string;
 }
 
+/** Reduce a flattened field path like "ftgd-wf.filters[3].action" or
+ * "_url_filter.entries[0].url" to its leaf field name ("action", "url").
+ * Used for the field-visibility toggle so the user picks columns by
+ * semantic name rather than every per-index variant. */
+function leafName(path: string): string {
+  const lastDot = path.lastIndexOf(".");
+  const tail = lastDot === -1 ? path : path.slice(lastDot + 1);
+  // Strip any trailing array index like "category[0]".
+  const bracket = tail.indexOf("[");
+  return bracket === -1 ? tail : tail.slice(0, bracket);
+}
+
 function isResolved(v: unknown): v is ResolvedValue {
   return (
     typeof v === "object" &&
@@ -214,6 +229,21 @@ export default function ComparisonTable({
   const [pinLoading, setPinLoading] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
+  // Per-profile-type field visibility (persisted in localStorage). We track
+  // *hidden* leaf field names so newly-discovered fields default to visible.
+  const visibilityKey = `comparison:${profileType}`;
+  const [hiddenFields, setHiddenFields] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    setHiddenFields(loadHiddenFields(visibilityKey));
+  }, [visibilityKey]);
+
+  // Available leaf field names discovered from the current dataset.
+  const availableLeaves = useMemo(() => {
+    const seen = new Set<string>();
+    for (const f of fields) seen.add(leafName(f.field_path));
+    return [...seen];
+  }, [fields]);
+
   const pinnedSet = useMemo(() => new Set(pinnedFields), [pinnedFields]);
 
   const filteredFields = useMemo(() => {
@@ -222,6 +252,9 @@ export default function ComparisonTable({
     else if (filter === "differs") result = result.filter((f) => !f.in_sync);
     else if (filter === "pinned")
       result = result.filter((f) => pinnedSet.has(f.field_path));
+    if (hiddenFields.size > 0) {
+      result = result.filter((f) => !hiddenFields.has(leafName(f.field_path)));
+    }
     if (search) {
       const q = search.toLowerCase();
       result = result.filter(
@@ -231,7 +264,7 @@ export default function ComparisonTable({
       );
     }
     return result;
-  }, [fields, filter, search, pinnedSet]);
+  }, [fields, filter, search, pinnedSet, hiddenFields]);
 
   const groups = useMemo(() => groupFields(filteredFields), [filteredFields]);
 
@@ -444,6 +477,12 @@ export default function ComparisonTable({
             {label}
           </button>
         ))}
+        <FieldVisibilityMenu
+          storageKey={visibilityKey}
+          available={availableLeaves}
+          hidden={hiddenFields}
+          onChange={setHiddenFields}
+        />
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={() => setCollapsed(new Set(allGroupKeys))}
