@@ -241,7 +241,7 @@ function matchEntries(
     const entries = getCollectionEntries(rawProfiles, name, collectionKey);
     const m = new Map<string, CollectionEntry>();
     entries.forEach((e, i) => {
-      const key = entryMatchKey(e, matchByUrl) || `pos:${i}`;
+      const key = entryMatchKey(e, matchByUrl, collectionKey) || `pos:${i}`;
       m.set(key, e);
     });
     return m;
