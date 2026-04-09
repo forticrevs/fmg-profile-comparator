@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { ComparisonField, togglePin } from "@/lib/api";
 import StructuredCollectionComparison from "@/components/StructuredCollectionComparison";
+import WebFilterCategoryTable from "@/components/WebFilterCategoryTable";
 import ActionBadge, { isActionKey } from "@/components/ActionBadge";
 import FieldVisibilityMenu, {
   loadHiddenFields,
@@ -442,6 +443,17 @@ export default function ComparisonTable({
 
   return (
     <div className="space-y-3">
+      {/* Webfilter profiles get a category-aligned table that unrolls each
+       * filter rule into per-category rows, since two profiles may apply
+       * different policies to the same category and the same category lives
+       * at different array indices in different profiles. */}
+      {profileType === "webfilter" && (
+        <WebFilterCategoryTable
+          profileNames={profileNames}
+          rawProfiles={rawProfiles}
+        />
+      )}
+
       {collectionKeys.map((collectionKey) => (
         <StructuredCollectionComparison
           key={collectionKey}
