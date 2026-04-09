@@ -194,25 +194,6 @@ npm run dev
 Open http://localhost:3000, register the first user, then add your FMG
 instance from the Settings page.
 
-## Notes for future agents
-
-- **Next.js here is 16.2 / React 19**, not the version most LLMs were trained
-  on. APIs and conventions differ — see [frontend/AGENTS.md](frontend/AGENTS.md)
-  and `node_modules/next/dist/docs/` before touching frontend infra.
-- **Don't add new action-colour logic anywhere** — extend
-  [ActionBadge.tsx](frontend/components/ActionBadge.tsx) and call it.
-- **Don't add new field-visibility UIs** — reuse
-  [FieldVisibilityMenu.tsx](frontend/components/FieldVisibilityMenu.tsx) with
-  a unique `storageKey`.
-- **The backend has no fixed FMG schema** — every column is discovered from
-  the data itself. Any logic that assumes a known field set will break the
-  next time FMG adds one.
-- **`EXCLUDED_FIELDS`** in [comparator.py](backend/app/services/comparator.py)
-  is the canonical list of fields that are *never* meaningful to compare
-  (`oid`, `uuid`, `obj seq`, `name`). Add to it instead of filtering at
-  call sites.
-- Sensitive files are in `.gitignore`: `.env`, `.fmg_key`, `*_store.json`,
-  `fmg_instances.json`, screenshots. Re-check before committing.
 
 ## License
 
