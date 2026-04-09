@@ -18,7 +18,7 @@ import {
 type View = "dashboard" | "picker" | "comparison";
 
 export default function Home() {
-  const { username, logout: doLogout } = useAuth();
+  const { username, activeInstance, needsSetup, logout: doLogout } = useAuth();
   const router = useRouter();
   const [view, setView] = useState<View>("dashboard");
   const [types, setTypes] = useState<ProfileType[]>([]);
@@ -177,8 +177,38 @@ export default function Home() {
               >
                 IPS Signatures
               </button>
+              <button
+                onClick={() => router.push("/reference/dlp-sensors")}
+                className="text-slate-500 hover:text-cyan-400 transition"
+              >
+                DLP Sensors
+              </button>
+              <button
+                onClick={() => router.push("/reference/dlp-dictionaries")}
+                className="text-slate-500 hover:text-cyan-400 transition"
+              >
+                DLP Dictionaries
+              </button>
+              <button
+                onClick={() => router.push("/reference/dlp-data-types")}
+                className="text-slate-500 hover:text-cyan-400 transition"
+              >
+                DLP Data Types
+              </button>
             </nav>
             <div className="h-4 w-px bg-slate-800" />
+            {activeInstance && (
+              <span className="text-[10px] px-2 py-0.5 rounded bg-cyan-900/40 text-cyan-400 border border-cyan-800/50">
+                {activeInstance.name}
+              </span>
+            )}
+            <button
+              onClick={() => router.push("/settings")}
+              className="text-xs text-slate-500 hover:text-cyan-400 transition"
+              title="Settings"
+            >
+              ⚙
+            </button>
             <span className="text-xs text-slate-500">{username}</span>
             <button
               onClick={doLogout}
@@ -191,6 +221,38 @@ export default function Home() {
       </header>
 
       <div className="w-full px-6 py-6">
+        {/* Setup prompt */}
+        {needsSetup && (
+          <div className="mb-6 bg-amber-950/30 border border-amber-800/50 rounded-xl p-4 text-amber-300 text-sm flex items-center justify-between">
+            <span>
+              No FortiManager instances configured.{" "}
+              <button
+                onClick={() => router.push("/settings")}
+                className="underline hover:text-amber-200"
+              >
+                Add one in Settings
+              </button>{" "}
+              to get started.
+            </span>
+          </div>
+        )}
+
+        {/* No active FMG */}
+        {!needsSetup && !activeInstance && (
+          <div className="mb-6 bg-blue-950/30 border border-blue-800/50 rounded-xl p-4 text-blue-300 text-sm flex items-center justify-between">
+            <span>
+              No FortiManager connected.{" "}
+              <button
+                onClick={() => router.push("/settings")}
+                className="underline hover:text-blue-200"
+              >
+                Select one in Settings
+              </button>{" "}
+              to begin comparing profiles.
+            </span>
+          </div>
+        )}
+
         {/* Error */}
         {error && (
           <div className="mb-6 bg-red-950/50 border border-red-800 rounded-xl p-4 text-red-300 flex items-center justify-between">

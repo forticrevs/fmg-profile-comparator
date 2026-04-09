@@ -149,6 +149,7 @@ class FMGClient:
         "application": "/pm/config/adom/{adom}/obj/application/list",
         "webfilter": "/pm/config/adom/{adom}/obj/webfilter/profile",
         "ips": "/pm/config/adom/{adom}/obj/ips/sensor",
+        "dlp": "/pm/config/adom/{adom}/obj/dlp/profile",
     }
 
     # SD-WAN templates use wanprof scope
@@ -306,6 +307,33 @@ class FMGClient:
         data = await self._call(
             "get",
             [{"url": f"/pm/config/adom/{self._adom}/_rule/list"}],
+            verbose=True,
+        )
+        return data if isinstance(data, list) else []
+
+    async def list_dlp_sensors(self) -> list[dict[str, Any]]:
+        """Return FortiGuard DLP sensor catalog."""
+        data = await self._call(
+            "get",
+            [{"url": f"pm/config/adom/{self._adom}/_fdsdb/dlp/sensor"}],
+            verbose=True,
+        )
+        return data if isinstance(data, list) else []
+
+    async def list_dlp_dictionaries(self) -> list[dict[str, Any]]:
+        """Return FortiGuard DLP dictionary catalog."""
+        data = await self._call(
+            "get",
+            [{"url": f"pm/config/adom/{self._adom}/_fdsdb/dlp/dictionary"}],
+            verbose=True,
+        )
+        return data if isinstance(data, list) else []
+
+    async def list_dlp_data_types(self) -> list[dict[str, Any]]:
+        """Return FortiGuard DLP data-type catalog."""
+        data = await self._call(
+            "get",
+            [{"url": f"pm/config/adom/{self._adom}/_fdsdb/dlp/data-type"}],
             verbose=True,
         )
         return data if isinstance(data, list) else []

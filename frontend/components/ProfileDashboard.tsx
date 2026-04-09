@@ -41,6 +41,13 @@ const TYPE_META: Record<
       "SD-WAN template comparison: zones, interfaces, routing rules, SLA health checks, and performance targets.",
     gradient: "from-emerald-600/20 to-emerald-900/10",
   },
+  dlp: {
+    icon: "🔒",
+    color: "purple",
+    description:
+      "Data leak prevention profile comparison: sensors, filters, dictionaries, and fingerprint settings.",
+    gradient: "from-purple-600/20 to-purple-900/10",
+  },
 };
 
 const colorMap: Record<string, string> = {
@@ -49,6 +56,8 @@ const colorMap: Record<string, string> = {
   amber: "border-amber-800 hover:border-amber-600 hover:shadow-amber-900/20",
   emerald:
     "border-emerald-800 hover:border-emerald-600 hover:shadow-emerald-900/20",
+  purple:
+    "border-purple-800 hover:border-purple-600 hover:shadow-purple-900/20",
 };
 
 const iconBg: Record<string, string> = {
@@ -56,6 +65,7 @@ const iconBg: Record<string, string> = {
   blue: "bg-blue-900/50",
   amber: "bg-amber-900/50",
   emerald: "bg-emerald-900/50",
+  purple: "bg-purple-900/50",
 };
 
 export default function ProfileDashboard({ types, onSelectType }: Props) {

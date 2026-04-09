@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { verifySession, logout } from "@/lib/api";
+import { verifySession, logout, FmgInstance } from "@/lib/api";
 
 interface AuthGuardProps {
   children: React.ReactNode;
@@ -13,6 +13,9 @@ export default function AuthGuard({ children }: AuthGuardProps) {
   const pathname = usePathname();
   const [checked, setChecked] = useState(false);
   const [username, setUsername] = useState<string>("");
+  const [activeInstance, setActiveInstance] = useState<FmgInstance | null>(null);
+  const [instances, setInstances] = useState<FmgInstance[]>([]);
+  const [needsSetup, setNeedsSetup] = useState(false);
 
   useEffect(() => {
     // Skip auth check on login page
@@ -27,14 +30,16 @@ export default function AuthGuard({ children }: AuthGuardProps) {
       return;
     }
 
-    verifySession().then(({ valid, username: user }) => {
-      if (!valid) {
+    verifySession().then((result) => {
+      if (!result.valid) {
         localStorage.removeItem("fmg_token");
         localStorage.removeItem("fmg_user");
-        localStorage.removeItem("fmg_host");
         router.replace("/login");
       } else {
-        setUsername(user || localStorage.getItem("fmg_user") || "");
+        setUsername(result.username || localStorage.getItem("fmg_user") || "");
+        setActiveInstance(result.activeInstance || null);
+        setInstances(result.instances || []);
+        setNeedsSetup(result.needsSetup || false);
         setChecked(true);
       }
     });
@@ -53,7 +58,18 @@ export default function AuthGuard({ children }: AuthGuardProps) {
   }
 
   return (
-    <AuthContext.Provider value={{ username, logout: handleLogout }}>
+    <AuthContext.Provider
+      value={{
+        username,
+        activeInstance,
+        instances,
+        needsSetup,
+        setActiveInstance,
+        setInstances,
+        setNeedsSetup,
+        logout: handleLogout,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );
@@ -69,11 +85,23 @@ import { createContext, useContext } from "react";
 
 interface AuthContextType {
   username: string;
+  activeInstance: FmgInstance | null;
+  instances: FmgInstance[];
+  needsSetup: boolean;
+  setActiveInstance: (inst: FmgInstance | null) => void;
+  setInstances: (insts: FmgInstance[]) => void;
+  setNeedsSetup: (v: boolean) => void;
   logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType>({
   username: "",
+  activeInstance: null,
+  instances: [],
+  needsSetup: false,
+  setActiveInstance: () => {},
+  setInstances: () => {},
+  setNeedsSetup: () => {},
   logout: async () => {},
 });
 

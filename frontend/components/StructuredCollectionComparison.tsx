@@ -2,6 +2,25 @@
 
 import { useMemo, useState, useEffect } from "react";
 
+/* ------------------------------------------------------------------ */
+/* Fade-in animation style (injected once)                             */
+/* ------------------------------------------------------------------ */
+const FADE_STYLE_ID = "scc-fade-style";
+function ensureFadeStyle() {
+  if (typeof document === "undefined") return;
+  if (document.getElementById(FADE_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = FADE_STYLE_ID;
+  style.textContent = `
+    @keyframes scc-fade-in {
+      from { opacity: 0; transform: translateY(4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .scc-fade-in { animation: scc-fade-in 0.35s ease-out both; }
+  `;
+  document.head.appendChild(style);
+}
+
 interface Props {
   collectionKey: string;
   profileNames: string[];
@@ -45,6 +64,92 @@ function formatValue(value: unknown): string {
     return entries.map(([key, item]) => `${humanizeKey(key)}: ${formatValue(item)}`).join(" | ");
   }
   return String(value);
+}
+
+/* ------------------------------------------------------------------ */
+/* SmartValue — multi-column pill grid for list-like values             */
+/* ------------------------------------------------------------------ */
+const LIST_THRESHOLD = 4; // render as pill grid when ≥ this many items
+
+function extractListItems(value: unknown): string[] | null {
+  // Already an array
+  if (Array.isArray(value)) {
+    const flat = value.map((v) => {
+      if (isResolvedValue(v)) return v.display;
+      if (typeof v === "object" && v !== null) return formatValue(v);
+      return String(v ?? "");
+    });
+    if (flat.length >= LIST_THRESHOLD) return flat;
+    return null;
+  }
+  // Resolved value wrapping a comma-separated string
+  if (isResolvedValue(value) && typeof value.display === "string") {
+    const parts = value.display.split(",").map((s) => s.trim()).filter(Boolean);
+    if (parts.length >= LIST_THRESHOLD) return parts;
+    return null;
+  }
+  // Plain comma-separated string
+  if (typeof value === "string") {
+    const parts = value.split(",").map((s) => s.trim()).filter(Boolean);
+    if (parts.length >= LIST_THRESHOLD) return parts;
+    return null;
+  }
+  return null;
+}
+
+function SmartValue({
+  value,
+  className,
+  showDefault,
+}: {
+  value: unknown;
+  className: string;
+  showDefault?: boolean;
+}) {
+  useEffect(() => { ensureFadeStyle(); }, []);
+
+  const listItems = useMemo(() => {
+    const items = extractListItems(value);
+    return items ? [...items].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })) : null;
+  }, [value]);
+
+  if (!listItems) {
+    // Render as plain text
+    return (
+      <span className={`${className} scc-fade-in`}>
+        {formatValue(value)}
+        {showDefault && (
+          <span className="ml-1 text-[10px] text-slate-700">(default)</span>
+        )}
+      </span>
+    );
+  }
+
+  // Multi-column pill grid
+  return (
+    <div className={`scc-fade-in ${className}`}>
+      <div
+        className="gap-1"
+        style={{ columns: "2 8rem", columnGap: "0.375rem" }}
+      >
+        {listItems.map((item, i) => (
+          <span
+            key={i}
+            className="inline-block w-full mb-0.5 rounded bg-slate-800/60 border border-slate-700/40 px-1.5 py-0.5 text-[11px] leading-tight break-all"
+            style={{ animationDelay: `${Math.min(i * 15, 300)}ms` }}
+          >
+            {item}
+          </span>
+        ))}
+      </div>
+      <span className="text-[10px] text-slate-600 mt-1 block">
+        {listItems.length} items
+      </span>
+      {showDefault && (
+        <span className="text-[10px] text-slate-700">(default)</span>
+      )}
+    </div>
+  );
 }
 
 function canonicalStringify(value: unknown): string {
@@ -295,30 +400,28 @@ function MatchedEntryRow({
                     </td>
                     {row.entries.map((entry, i) => {
                       const val = entry ? entry[key] : undefined;
-                      const formatted = entry ? formatValue(val) : "—";
                       const isMissing = !entry;
                       const isFieldDefault =
                         !!entry && isDefaultValue(key, val, defaults);
                       return (
                         <td key={profileNames[i]} className="px-3 py-2 align-top">
-                          <span
-                            className={`block whitespace-pre-wrap break-all text-xs ${
-                              isMissing
-                                ? "text-slate-600 italic"
-                                : diff.differs
-                                ? "text-slate-100 font-medium"
-                                : isFieldDefault
-                                ? "text-slate-600"
-                                : "text-slate-400"
-                            }`}
-                          >
-                            {formatted}
-                            {isFieldDefault && (
-                              <span className="ml-1 text-[10px] text-slate-700">
-                                (default)
-                              </span>
-                            )}
-                          </span>
+                          {isMissing ? (
+                            <span className="block text-xs text-slate-600 italic scc-fade-in">
+                              —
+                            </span>
+                          ) : (
+                            <SmartValue
+                              value={val}
+                              showDefault={isFieldDefault}
+                              className={`block whitespace-pre-wrap break-all text-xs ${
+                                diff.differs
+                                  ? "text-slate-100 font-medium"
+                                  : isFieldDefault
+                                  ? "text-slate-600"
+                                  : "text-slate-400"
+                              }`}
+                            />
+                          )}
                         </td>
                       );
                     })}

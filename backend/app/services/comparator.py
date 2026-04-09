@@ -30,7 +30,7 @@ def _make_label(field_path: str) -> str:
 
 
 # Fields that are internal identifiers — never meaningful to compare
-EXCLUDED_FIELDS = {"oid", "uuid", "obj seq"}
+EXCLUDED_FIELDS = {"oid", "uuid", "obj seq", "name"}
 
 
 def _is_excluded(key: str) -> bool:

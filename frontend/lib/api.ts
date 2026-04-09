@@ -22,7 +22,6 @@ async function authFetch(url: string, init?: RequestInit): Promise<Response> {
     // Token expired — clear and redirect
     localStorage.removeItem("fmg_token");
     localStorage.removeItem("fmg_user");
-    localStorage.removeItem("fmg_host");
     window.location.href = "/login";
     throw new Error("Session expired");
   }
@@ -30,14 +29,13 @@ async function authFetch(url: string, init?: RequestInit): Promise<Response> {
 }
 
 export async function login(
-  host: string,
   username: string,
   password: string
-): Promise<{ token: string; username: string; host: string }> {
+): Promise<{ token: string; username: string; needsSetup: boolean }> {
   const res = await fetch(`${API_BASE}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ host, username, password }),
+    body: JSON.stringify({ username, password }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -46,7 +44,25 @@ export async function login(
   const data = await res.json();
   localStorage.setItem("fmg_token", data.token);
   localStorage.setItem("fmg_user", data.username);
-  localStorage.setItem("fmg_host", data.host);
+  return data;
+}
+
+export async function register(
+  username: string,
+  password: string
+): Promise<{ token: string; username: string; needsSetup: boolean }> {
+  const res = await fetch(`${API_BASE}/api/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || "Registration failed");
+  }
+  const data = await res.json();
+  localStorage.setItem("fmg_token", data.token);
+  localStorage.setItem("fmg_user", data.username);
   return data;
 }
 
@@ -58,12 +74,14 @@ export async function logout(): Promise<void> {
   }
   localStorage.removeItem("fmg_token");
   localStorage.removeItem("fmg_user");
-  localStorage.removeItem("fmg_host");
 }
 
 export async function verifySession(): Promise<{
   valid: boolean;
   username?: string;
+  activeInstance?: FmgInstance | null;
+  instances?: FmgInstance[];
+  needsSetup?: boolean;
 }> {
   const token = getToken();
   if (!token) return { valid: false };
@@ -73,10 +91,99 @@ export async function verifySession(): Promise<{
     });
     if (!res.ok) return { valid: false };
     const data = await res.json();
-    return { valid: true, username: data.username };
+    return {
+      valid: true,
+      username: data.username,
+      activeInstance: data.activeInstance,
+      instances: data.instances,
+      needsSetup: data.needsSetup,
+    };
   } catch {
     return { valid: false };
   }
+}
+
+export async function checkSetupRequired(): Promise<boolean> {
+  const res = await fetch(`${API_BASE}/api/auth/setup-required`);
+  if (!res.ok) return true;
+  const data = await res.json();
+  return data.setupRequired;
+}
+
+export async function connectFmg(instanceId: string): Promise<FmgInstance> {
+  const res = await authFetch(`${API_BASE}/api/auth/connect-fmg`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ instance_id: instanceId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || "Failed to connect to FMG");
+  }
+  const data = await res.json();
+  return data.activeInstance;
+}
+
+// ---------------------------------------------------------------------------
+// FMG instance management
+// ---------------------------------------------------------------------------
+
+export interface FmgInstance {
+  id: string;
+  name: string;
+  host: string;
+  username: string;
+  adom: string;
+  verify_ssl: boolean;
+}
+
+export async function fetchFmgInstances(): Promise<FmgInstance[]> {
+  const res = await authFetch(`${API_BASE}/api/settings/fmg-instances`);
+  if (!res.ok) throw new Error("Failed to fetch FMG instances");
+  return res.json();
+}
+
+export async function addFmgInstance(instance: {
+  name: string;
+  host: string;
+  fmg_username: string;
+  fmg_password: string;
+  adom?: string;
+  verify_ssl?: boolean;
+}): Promise<{ id: string; name: string }> {
+  const res = await authFetch(`${API_BASE}/api/settings/fmg-instances`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(instance),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || "Failed to add instance");
+  }
+  return res.json();
+}
+
+export async function updateFmgInstance(
+  instanceId: string,
+  updates: Record<string, unknown>
+): Promise<void> {
+  const res = await authFetch(
+    `${API_BASE}/api/settings/fmg-instances/${instanceId}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updates),
+    }
+  );
+  if (!res.ok) throw new Error("Failed to update instance");
+}
+
+export async function deleteFmgInstance(instanceId: string): Promise<void> {
+  const res = await authFetch(
+    `${API_BASE}/api/settings/fmg-instances/${instanceId}`,
+    { method: "DELETE" }
+  );
+  if (!res.ok) throw new Error("Failed to delete instance");
 }
 
 // ---------------------------------------------------------------------------
@@ -179,5 +286,23 @@ export async function fetchApplicationSignatures(): Promise<ReferenceListRespons
 export async function fetchIpsSignatures(): Promise<ReferenceListResponse> {
   const res = await authFetch(`${API_BASE}/api/reference/ips-signatures`);
   if (!res.ok) throw new Error("Failed to fetch IPS signatures");
+  return res.json();
+}
+
+export async function fetchDlpSensors(): Promise<ReferenceListResponse> {
+  const res = await authFetch(`${API_BASE}/api/reference/dlp-sensors`);
+  if (!res.ok) throw new Error("Failed to fetch DLP sensors");
+  return res.json();
+}
+
+export async function fetchDlpDictionaries(): Promise<ReferenceListResponse> {
+  const res = await authFetch(`${API_BASE}/api/reference/dlp-dictionaries`);
+  if (!res.ok) throw new Error("Failed to fetch DLP dictionaries");
+  return res.json();
+}
+
+export async function fetchDlpDataTypes(): Promise<ReferenceListResponse> {
+  const res = await authFetch(`${API_BASE}/api/reference/dlp-data-types`);
+  if (!res.ok) throw new Error("Failed to fetch DLP data types");
   return res.json();
 }

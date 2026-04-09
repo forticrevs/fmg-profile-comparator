@@ -20,7 +20,7 @@ from app.services import pin_store
 
 router = APIRouter(prefix="/api/profiles", tags=["profiles"])
 
-VALID_TYPES = {"application", "webfilter", "ips", "sdwan"}
+VALID_TYPES = {"application", "webfilter", "ips", "sdwan", "dlp"}
 
 
 def _validate_type(profile_type: str) -> None:
@@ -44,6 +44,7 @@ async def get_profile_types() -> list[dict[str, str]]:
         {"id": "application", "label": "Application Control"},
         {"id": "webfilter", "label": "Web Filter"},
         {"id": "ips", "label": "IPS Sensor"},
+        {"id": "dlp", "label": "DLP Profile"},
         {"id": "sdwan", "label": "SD-WAN Template"},
     ]
 

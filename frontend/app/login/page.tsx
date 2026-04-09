@@ -1,26 +1,41 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { login } from "@/lib/api";
+import { login, register, checkSetupRequired } from "@/lib/api";
 
 export default function LoginPage() {
   const router = useRouter();
-  const [host, setHost] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isRegister, setIsRegister] = useState(false);
+  const [firstRun, setFirstRun] = useState(false);
+
+  useEffect(() => {
+    checkSetupRequired().then((required) => {
+      if (required) {
+        setIsRegister(true);
+        setFirstRun(true);
+      }
+    });
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
     try {
-      await login(host, username, password);
-      router.push("/");
+      const fn = isRegister ? register : login;
+      const result = await fn(username, password);
+      if (result.needsSetup) {
+        router.push("/settings");
+      } else {
+        router.push("/");
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      setError(err instanceof Error ? err.message : "Authentication failed");
     } finally {
       setLoading(false);
     }
@@ -36,7 +51,11 @@ export default function LoginPage() {
           </div>
           <h1 className="text-2xl font-bold text-white">Profile Comparator</h1>
           <p className="text-slate-500 text-sm mt-1">
-            Sign in with your FortiManager credentials
+            {firstRun
+              ? "Create your first account to get started"
+              : isRegister
+              ? "Create a new account"
+              : "Sign in to your account"}
           </p>
         </div>
 
@@ -53,27 +72,12 @@ export default function LoginPage() {
 
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1.5">
-              FortiManager Host / IP
-            </label>
-            <input
-              type="text"
-              value={host}
-              onChange={(e) => setHost(e.target.value)}
-              placeholder="e.g. 10.224.129.21"
-              required
-              className="w-full bg-slate-950 border border-slate-700 text-white rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-600 placeholder-slate-600"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1.5">
               Username
             </label>
             <input
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="admin"
               required
               autoComplete="username"
               className="w-full bg-slate-950 border border-slate-700 text-white rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-600 placeholder-slate-600"
@@ -89,7 +93,7 @@ export default function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              autoComplete="current-password"
+              autoComplete={isRegister ? "new-password" : "current-password"}
               className="w-full bg-slate-950 border border-slate-700 text-white rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-600 placeholder-slate-600"
             />
           </div>
@@ -102,17 +106,48 @@ export default function LoginPage() {
             {loading ? (
               <span className="inline-flex items-center gap-2">
                 <span className="inline-block animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
-                Connecting...
+                {isRegister ? "Creating account..." : "Signing in..."}
               </span>
+            ) : isRegister ? (
+              "Create Account"
             ) : (
               "Sign In"
             )}
           </button>
 
-          <p className="text-[11px] text-slate-600 text-center">
-            Authenticates via FortiManager JSON-RPC API. Requires json-rpc
-            access enabled on the FMG user profile.
-          </p>
+          {!firstRun && (
+            <p className="text-[11px] text-slate-600 text-center">
+              {isRegister ? (
+                <>
+                  Already have an account?{" "}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsRegister(false);
+                      setError(null);
+                    }}
+                    className="text-cyan-500 hover:text-cyan-400"
+                  >
+                    Sign in
+                  </button>
+                </>
+              ) : (
+                <>
+                  Need an account?{" "}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsRegister(true);
+                      setError(null);
+                    }}
+                    className="text-cyan-500 hover:text-cyan-400"
+                  >
+                    Register
+                  </button>
+                </>
+              )}
+            </p>
+          )}
         </form>
       </div>
     </main>

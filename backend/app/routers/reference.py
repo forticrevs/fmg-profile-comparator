@@ -41,3 +41,51 @@ async def get_ips_signatures(
         count=len(items),
         items=items,
     )
+
+
+@router.get("/dlp-sensors")
+async def get_dlp_sensors(
+    fmg_client: FMGClient = Depends(get_current_fmg),
+) -> ReferenceListResponse:
+    try:
+        items = await fmg_client.list_dlp_sensors()
+    except Exception as exc:
+        raise HTTPException(502, f"FMG error: {exc}")
+
+    return ReferenceListResponse(
+        reference_type="dlp-sensors",
+        count=len(items),
+        items=items,
+    )
+
+
+@router.get("/dlp-dictionaries")
+async def get_dlp_dictionaries(
+    fmg_client: FMGClient = Depends(get_current_fmg),
+) -> ReferenceListResponse:
+    try:
+        items = await fmg_client.list_dlp_dictionaries()
+    except Exception as exc:
+        raise HTTPException(502, f"FMG error: {exc}")
+
+    return ReferenceListResponse(
+        reference_type="dlp-dictionaries",
+        count=len(items),
+        items=items,
+    )
+
+
+@router.get("/dlp-data-types")
+async def get_dlp_data_types(
+    fmg_client: FMGClient = Depends(get_current_fmg),
+) -> ReferenceListResponse:
+    try:
+        items = await fmg_client.list_dlp_data_types()
+    except Exception as exc:
+        raise HTTPException(502, f"FMG error: {exc}")
+
+    return ReferenceListResponse(
+        reference_type="dlp-data-types",
+        count=len(items),
+        items=items,
+    )

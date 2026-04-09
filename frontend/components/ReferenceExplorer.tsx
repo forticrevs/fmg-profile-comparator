@@ -6,10 +6,13 @@ import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import {
   fetchApplicationSignatures,
   fetchIpsSignatures,
+  fetchDlpSensors,
+  fetchDlpDictionaries,
+  fetchDlpDataTypes,
   ReferenceListResponse,
 } from "@/lib/api";
 
-type ReferenceKind = "application-signatures" | "ips-signatures";
+type ReferenceKind = "application-signatures" | "ips-signatures" | "dlp-sensors" | "dlp-dictionaries" | "dlp-data-types";
 type FilterOperator = "contains" | "not_contains" | "equals" | "regex";
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 250, 500];
@@ -46,9 +49,18 @@ function formatValue(value: unknown): string {
 }
 
 function getFetcher(kind: ReferenceKind) {
-  return kind === "application-signatures"
-    ? fetchApplicationSignatures
-    : fetchIpsSignatures;
+  switch (kind) {
+    case "application-signatures":
+      return fetchApplicationSignatures;
+    case "ips-signatures":
+      return fetchIpsSignatures;
+    case "dlp-sensors":
+      return fetchDlpSensors;
+    case "dlp-dictionaries":
+      return fetchDlpDictionaries;
+    case "dlp-data-types":
+      return fetchDlpDataTypes;
+  }
 }
 
 function matchesFilter(value: string, rule: FilterRule): boolean {
