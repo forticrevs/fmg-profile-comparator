@@ -15,9 +15,15 @@ def flatten(obj: Any, prefix: str = "", sep: str = ".") -> dict[str, Any]:
             new_key = f"{prefix}{sep}{k}" if prefix else k
             items.update(flatten(v, new_key, sep))
     elif isinstance(obj, list):
-        for i, v in enumerate(obj):
-            new_key = f"{prefix}[{i}]"
-            items.update(flatten(v, new_key, sep))
+        # Arrays of pure scalars (e.g. ["smtp", "pop3", "imap"]) are kept as
+        # a single list value rather than exploded into indexed leaves — the
+        # UI renders them as a comma-joined cell.
+        if len(obj) > 0 and all(not isinstance(x, (dict, list)) for x in obj):
+            items[prefix] = obj
+        else:
+            for i, v in enumerate(obj):
+                new_key = f"{prefix}[{i}]"
+                items.update(flatten(v, new_key, sep))
     else:
         items[prefix] = obj
     return items
@@ -118,13 +124,17 @@ def compare_profiles(
             else:
                 values[pname] = raw
 
-        # For sync comparison, extract raw values (ignore display wrappers)
-        raw_vals = set()
-        for v in values.values():
-            if isinstance(v, dict) and "raw" in v:
-                raw_vals.add(str(v["raw"]))
-            else:
-                raw_vals.add(str(v))
+        # For sync comparison, extract raw values (ignore display wrappers).
+        # Scalar lists are compared order-independently so e.g.
+        # ["smtp","pop3"] and ["pop3","smtp"] are considered in sync.
+        def _norm(x: Any) -> str:
+            if isinstance(x, dict) and "raw" in x:
+                x = x["raw"]
+            if isinstance(x, list):
+                return str(sorted(x, key=str))
+            return str(x)
+
+        raw_vals = {_norm(v) for v in values.values()}
         in_sync = len(raw_vals) == 1
 
         fields.append(

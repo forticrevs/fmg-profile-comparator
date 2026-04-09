@@ -203,6 +203,15 @@ function formatValue(v: unknown): { text: string; tooltip: string; resolved: boo
     };
   }
   if (typeof v === "boolean") return { text: v ? "true" : "false", tooltip: String(v), resolved: false };
+  if (Array.isArray(v)) {
+    // Scalar arrays render as a comma-joined value, not vertical letter soup.
+    if (v.every((x) => x === null || ["string", "number", "boolean"].includes(typeof x))) {
+      const s = v.join(", ");
+      return { text: s || "—", tooltip: s, resolved: false };
+    }
+    const s = JSON.stringify(v);
+    return { text: s, tooltip: s, resolved: false };
+  }
   if (typeof v === "object") {
     const s = JSON.stringify(v);
     return { text: s, tooltip: s, resolved: false };
