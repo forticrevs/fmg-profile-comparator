@@ -50,7 +50,9 @@ def _is_object_collection(value: Any) -> bool:
 
 
 def find_collection_keys(profiles: dict[str, dict[str, Any]]) -> list[str]:
-    """Return top-level collection keys that are better rendered structurally."""
+    """Return collection keys (top-level or one level nested) that are
+    better rendered structurally.  Detects e.g. top-level lists of dicts
+    as well as nested ones like ``ftgd-wf.filters`` or ``_url_filter.entries``."""
     keys: set[str] = set()
     for profile in profiles.values():
         if not isinstance(profile, dict):
@@ -58,12 +60,18 @@ def find_collection_keys(profiles: dict[str, dict[str, Any]]) -> list[str]:
         for key, value in profile.items():
             if _is_object_collection(value):
                 keys.add(key)
+            elif isinstance(value, dict):
+                for subkey, subvalue in value.items():
+                    if _is_object_collection(subvalue):
+                        keys.add(f"{key}.{subkey}")
     return sorted(keys)
 
 
 def _belongs_to_collection(key: str, collection_roots: set[str]) -> bool:
-    root = key.split(".", 1)[0].split("[", 1)[0]
-    return root in collection_roots
+    for root in collection_roots:
+        if key == root or key.startswith(root + ".") or key.startswith(root + "["):
+            return True
+    return False
 
 
 def compare_profiles(

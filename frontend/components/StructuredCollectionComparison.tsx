@@ -185,8 +185,16 @@ function getCollectionEntries(
   profileName: string,
   collectionKey: string,
 ): CollectionEntry[] {
-  const value = rawProfiles[profileName]?.[collectionKey];
-  return isObjectCollection(value) ? value : [];
+  // Support dot-notation paths like "ftgd-wf.filters" or "_url_filter.entries"
+  let obj: unknown = rawProfiles[profileName];
+  for (const part of collectionKey.split(".")) {
+    if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+      obj = (obj as Record<string, unknown>)[part];
+    } else {
+      return [];
+    }
+  }
+  return isObjectCollection(obj) ? obj : [];
 }
 
 function sortEntryKeys(keys: string[]): string[] {
@@ -202,9 +210,17 @@ function sortEntryKeys(keys: string[]): string[] {
   });
 }
 
-function entryMatchKey(entry: CollectionEntry): string {
+function entryMatchKey(entry: CollectionEntry, matchByUrl: boolean, collectionKey: string): string {
+  // For web filter category entries (ftgd-wf.filters), prioritize category over id
+  // since IDs can differ across profiles but categories represent the same thing
+  const isFtgdFilter = collectionKey.includes("ftgd-wf") || collectionKey.includes("filters");
+  if (isFtgdFilter && entry.category !== undefined && entry.category !== null)
+    return `cat:${normalizeForCompare(entry.category)}`;
   if (entry.id !== undefined && entry.id !== null) return `id:${entry.id}`;
   if (typeof entry.name === "string") return `name:${entry.name}`;
+  if (entry.category !== undefined && entry.category !== null)
+    return `cat:${normalizeForCompare(entry.category)}`;
+  if (matchByUrl && typeof entry.url === "string") return `url:${entry.url}`;
   if (entry.rule !== undefined) return `rule:${normalizeForCompare(entry.rule)}`;
   return "";
 }
@@ -219,12 +235,13 @@ function matchEntries(
   profileNames: string[],
   rawProfiles: Record<string, Record<string, unknown>>,
   collectionKey: string,
+  matchByUrl: boolean = true,
 ): MatchedRow[] {
   const profileMaps: Map<string, CollectionEntry>[] = profileNames.map((name) => {
     const entries = getCollectionEntries(rawProfiles, name, collectionKey);
     const m = new Map<string, CollectionEntry>();
     entries.forEach((e, i) => {
-      const key = entryMatchKey(e) || `pos:${i}`;
+      const key = entryMatchKey(e, matchByUrl) || `pos:${i}`;
       m.set(key, e);
     });
     return m;
@@ -247,6 +264,18 @@ function matchEntries(
     const id = first.id;
     let label = typeof id === "number" || typeof id === "string" ? `Entry ${id}` : matchKey;
     if (first.name && typeof first.name === "string") label = first.name;
+    else if (first.category !== undefined && first.category !== null) {
+      const catVal = first.category;
+      if (Array.isArray(catVal)) {
+        label = `Category ${catVal.map((c) => (isResolvedValue(c) ? c.display : String(c))).join(", ")}`;
+      } else if (isResolvedValue(catVal)) {
+        label = `Category ${catVal.display}`;
+      } else {
+        label = `Category ${String(catVal)}`;
+      }
+    } else if (typeof first.url === "string") {
+      label = first.url;
+    }
     return { matchKey, label, entries };
   });
 }
@@ -403,12 +432,15 @@ function MatchedEntryRow({
                       const isMissing = !entry;
                       const isFieldDefault =
                         !!entry && isDefaultValue(key, val, defaults);
+                      const isAction = isActionKey(key);
                       return (
                         <td key={profileNames[i]} className="px-3 py-2 align-top">
                           {isMissing ? (
                             <span className="block text-xs text-slate-600 italic scc-fade-in">
                               —
                             </span>
+                          ) : isAction ? (
+                            <ActionBadge value={formatValue(val)} />
                           ) : (
                             <SmartValue
                               value={val}
@@ -449,6 +481,64 @@ function MatchedEntryRow({
 }
 
 // ---------------------------------------------------------------------------
+// Action colour helpers
+// ---------------------------------------------------------------------------
+const ACTION_COLORS: Record<string, { bg: string; text: string; border: string }> = {
+  block: { bg: "bg-red-950/60", text: "text-red-300", border: "border-red-800/60" },
+  deny: { bg: "bg-red-950/60", text: "text-red-300", border: "border-red-800/60" },
+  drop: { bg: "bg-red-950/60", text: "text-red-300", border: "border-red-800/60" },
+  reject: { bg: "bg-red-950/60", text: "text-red-300", border: "border-red-800/60" },
+  allow: { bg: "bg-emerald-950/60", text: "text-emerald-300", border: "border-emerald-800/60" },
+  pass: { bg: "bg-emerald-950/60", text: "text-emerald-300", border: "border-emerald-800/60" },
+  accept: { bg: "bg-emerald-950/60", text: "text-emerald-300", border: "border-emerald-800/60" },
+  monitor: { bg: "bg-blue-950/60", text: "text-blue-300", border: "border-blue-800/60" },
+  warning: { bg: "bg-blue-950/60", text: "text-blue-300", border: "border-blue-800/60" },
+  authenticate: { bg: "bg-blue-950/60", text: "text-blue-300", border: "border-blue-800/60" },
+  exempt: { bg: "bg-slate-800/60", text: "text-slate-400", border: "border-slate-700/60" },
+};
+const ACTION_DEFAULT = { bg: "bg-amber-950/50", text: "text-amber-300", border: "border-amber-800/60" };
+
+function getActionStyle(val: string) {
+  const lower = val.toLowerCase().trim();
+  return ACTION_COLORS[lower] ?? ACTION_DEFAULT;
+}
+
+function isActionKey(key: string): boolean {
+  const l = key.toLowerCase();
+  return l === "action" || l === "default-action";
+}
+
+// ---------------------------------------------------------------------------
+// ActionBadge for inline use
+// ---------------------------------------------------------------------------
+function ActionBadge({ value }: { value: string }) {
+  if (!value || value === "—") return <span className="text-slate-600">—</span>;
+  const style = getActionStyle(value);
+  return (
+    <span
+      className={`inline-block rounded-full border px-2 py-0.5 text-[11px] font-medium ${style.bg} ${style.text} ${style.border}`}
+    >
+      {value}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Detect if collection has URL entries (for toggle)
+// ---------------------------------------------------------------------------
+function collectionHasUrlEntries(
+  profileNames: string[],
+  rawProfiles: Record<string, Record<string, unknown>>,
+  collectionKey: string,
+): boolean {
+  for (const name of profileNames) {
+    const entries = getCollectionEntries(rawProfiles, name, collectionKey);
+    if (entries.some((e) => typeof e.url === "string")) return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -461,22 +551,36 @@ export default function StructuredCollectionComparison({
   const [filter, setFilter] = useState<FilterMode>("all");
   const [hideDefaults, setHideDefaults] = useState(false);
   const [expandState, setExpandState] = useState<boolean | undefined>(undefined);
+  const [matchByUrl, setMatchByUrl] = useState(true);
 
   const label = humanizeKey(collectionKey);
+
+  const hasUrlEntries = useMemo(
+    () => collectionHasUrlEntries(profileNames, rawProfiles, collectionKey),
+    [profileNames, rawProfiles, collectionKey],
+  );
 
   // Extract entry-level defaults from the full profile defaults object
   const entryDefaults = useMemo(() => {
     if (!defaults) return undefined;
-    const col = defaults[collectionKey];
-    if (Array.isArray(col) && col.length > 0 && typeof col[0] === "object") {
-      return col[0] as Record<string, unknown>;
+    // Support dot-path collection keys for defaults too
+    let obj: unknown = defaults;
+    for (const part of collectionKey.split(".")) {
+      if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+        obj = (obj as Record<string, unknown>)[part];
+      } else {
+        return undefined;
+      }
+    }
+    if (Array.isArray(obj) && obj.length > 0 && typeof obj[0] === "object") {
+      return obj[0] as Record<string, unknown>;
     }
     return undefined;
   }, [defaults, collectionKey]);
 
   const matchedRows = useMemo(
-    () => matchEntries(profileNames, rawProfiles, collectionKey),
-    [profileNames, rawProfiles, collectionKey],
+    () => matchEntries(profileNames, rawProfiles, collectionKey, matchByUrl),
+    [profileNames, rawProfiles, collectionKey, matchByUrl],
   );
 
   const rowsWithCounts = useMemo(() => {
@@ -568,6 +672,21 @@ export default function StructuredCollectionComparison({
           />
           Hide defaults
         </label>
+
+        {hasUrlEntries && (
+          <>
+            <div className="h-4 w-px bg-slate-800 mx-1" />
+            <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={matchByUrl}
+                onChange={(e) => setMatchByUrl(e.target.checked)}
+                className="rounded border-slate-700 bg-slate-900 text-cyan-600 focus:ring-cyan-600 focus:ring-offset-0 h-3.5 w-3.5"
+              />
+              Align by URL
+            </label>
+          </>
+        )}
 
         <div className="ml-auto flex items-center gap-2">
           <button
