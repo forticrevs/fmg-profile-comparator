@@ -49,21 +49,29 @@ def _is_object_collection(value: Any) -> bool:
     )
 
 
+def _walk_for_collections(value: Any, path: str, out: set[str]) -> None:
+    """Recursively walk a profile, recording dot-paths to every list-of-dicts
+    encountered. Stops descending once a collection is found at a path so we
+    don't double-register children (those are rendered nested by the UI)."""
+    if _is_object_collection(value):
+        out.add(path)
+        # Don't descend into the entries — the UI will handle nesting itself.
+        return
+    if isinstance(value, dict):
+        for subkey, subvalue in value.items():
+            new_path = f"{path}.{subkey}" if path else subkey
+            _walk_for_collections(subvalue, new_path, out)
+
+
 def find_collection_keys(profiles: dict[str, dict[str, Any]]) -> list[str]:
-    """Return collection keys (top-level or one level nested) that are
-    better rendered structurally.  Detects e.g. top-level lists of dicts
-    as well as nested ones like ``ftgd-wf.filters`` or ``_url_filter.entries``."""
+    """Return dot-paths to every object-collection (list-of-dicts) found at
+    any depth in any profile.  These get rendered structurally by the UI
+    and are excluded from the flat field comparison."""
     keys: set[str] = set()
     for profile in profiles.values():
         if not isinstance(profile, dict):
             continue
-        for key, value in profile.items():
-            if _is_object_collection(value):
-                keys.add(key)
-            elif isinstance(value, dict):
-                for subkey, subvalue in value.items():
-                    if _is_object_collection(subvalue):
-                        keys.add(f"{key}.{subkey}")
+        _walk_for_collections(profile, "", keys)
     return sorted(keys)
 
 

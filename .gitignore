@@ -34,3 +34,15 @@ out/
 .DS_Store
 Thumbs.db
 todos.md
+CHECKPOINT.md
+
+# Sensitive runtime state — never commit
+backend/.fmg_key
+backend/fmg_instances.json
+backend/user_store.json
+backend/pin_store.json
+
+# Local screenshots / scratch images
+image.png
+image-*.png
+*.screenshot.png

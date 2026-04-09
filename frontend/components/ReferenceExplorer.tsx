@@ -52,20 +52,28 @@ const OPERATOR_LABELS: Record<FilterOperator, string> = {
 /* ------------------------------------------------------------------ */
 /* Action colour helpers                                               */
 /* ------------------------------------------------------------------ */
+const RED = { bg: "bg-red-900/70", text: "text-red-100", border: "border-red-700/70" };
+const GREEN = { bg: "bg-emerald-900/70", text: "text-emerald-100", border: "border-emerald-700/70" };
+const BLUE = { bg: "bg-blue-900/70", text: "text-blue-100", border: "border-blue-700/70" };
+const ORANGE = { bg: "bg-orange-900/70", text: "text-orange-100", border: "border-orange-700/70" };
+const GREY = { bg: "bg-slate-700/70", text: "text-slate-100", border: "border-slate-500/70" };
+
 const ACTION_COLORS: Record<string, { bg: string; text: string; border: string }> = {
-  block: { bg: "bg-red-950/60", text: "text-red-300", border: "border-red-800/60" },
-  deny: { bg: "bg-red-950/60", text: "text-red-300", border: "border-red-800/60" },
-  drop: { bg: "bg-red-950/60", text: "text-red-300", border: "border-red-800/60" },
-  reject: { bg: "bg-red-950/60", text: "text-red-300", border: "border-red-800/60" },
-  allow: { bg: "bg-emerald-950/60", text: "text-emerald-300", border: "border-emerald-800/60" },
-  pass: { bg: "bg-emerald-950/60", text: "text-emerald-300", border: "border-emerald-800/60" },
-  accept: { bg: "bg-emerald-950/60", text: "text-emerald-300", border: "border-emerald-800/60" },
-  monitor: { bg: "bg-blue-950/60", text: "text-blue-300", border: "border-blue-800/60" },
-  warning: { bg: "bg-blue-950/60", text: "text-blue-300", border: "border-blue-800/60" },
-  authenticate: { bg: "bg-blue-950/60", text: "text-blue-300", border: "border-blue-800/60" },
-  exempt: { bg: "bg-slate-800/60", text: "text-slate-400", border: "border-slate-700/60" },
+  block: RED, blocked: RED,
+  deny: RED, denied: RED,
+  drop: RED, dropped: RED,
+  reject: RED, rejected: RED,
+  allow: GREEN, allowed: GREEN,
+  permit: GREEN, permitted: GREEN,
+  pass: GREEN, accept: GREEN, accepted: GREEN,
+  monitor: BLUE, monitored: BLUE, log: BLUE, observe: BLUE,
+  warn: ORANGE, warning: ORANGE, alert: ORANGE, notify: ORANGE,
+  exempt: GREY, exempted: GREY,
+  skip: GREY, skipped: GREY,
+  ignore: GREY, ignored: GREY,
+  bypass: GREY, bypassed: GREY,
 };
-const ACTION_DEFAULT = { bg: "bg-amber-950/50", text: "text-amber-300", border: "border-amber-800/60" };
+const ACTION_DEFAULT = { bg: "bg-amber-950/50", text: "text-amber-100", border: "border-amber-700/60" };
 
 function getActionStyle(val: string) {
   const lower = val.toLowerCase().trim();

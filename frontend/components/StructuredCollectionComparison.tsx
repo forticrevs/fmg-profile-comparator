@@ -154,12 +154,22 @@ function SmartValue({
 
 function canonicalStringify(value: unknown): string {
   if (value === null || value === undefined) return "";
+  if (isResolvedValue(value)) return JSON.stringify(value.raw);
   if (Array.isArray(value)) {
-    return "[" + value.map(canonicalStringify).join(",") + "]";
+    // Sort arrays of objects so element order doesn't cause false diffs
+    // (e.g. SD-WAN sla entries returned by FMG in non-deterministic order).
+    const parts = value.map(canonicalStringify);
+    const allObjects =
+      value.length > 0 &&
+      value.every((v) => typeof v === "object" && v !== null && !isResolvedValue(v));
+    if (allObjects) parts.sort();
+    return "[" + parts.join(",") + "]";
   }
   if (typeof value === "object") {
     const obj = value as Record<string, unknown>;
-    const keys = Object.keys(obj).sort();
+    const keys = Object.keys(obj)
+      .filter((k) => !HIDDEN_ENTRY_KEYS.has(k))
+      .sort();
     return (
       "{" +
       keys.map((k) => JSON.stringify(k) + ":" + canonicalStringify(obj[k])).join(",") +
@@ -167,6 +177,16 @@ function canonicalStringify(value: unknown): string {
     );
   }
   return JSON.stringify(value);
+}
+
+/** Detect a value that should render as a nested mini-table:
+ * an array of plain objects (not ResolvedValue wrappers). */
+function isObjectArray(value: unknown): value is Record<string, unknown>[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((v) => typeof v === "object" && v !== null && !isResolvedValue(v))
+  );
 }
 
 function normalizeForCompare(value: unknown): string {
@@ -210,17 +230,50 @@ function sortEntryKeys(keys: string[]): string[] {
   });
 }
 
+/** Extract a readable label from a value that may be a ResolvedValue,
+ * array, primitive, etc. Prefers human-readable display names. */
+function categoryMatchToken(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (isResolvedValue(value)) {
+    // Prefer the display name (e.g. "Personal Websites and Blogs") over the
+    // raw integer id — ids can differ across profiles but names align.
+    return value.display.toLowerCase().trim();
+  }
+  if (Array.isArray(value)) {
+    return value.map(categoryMatchToken).filter(Boolean).join("|");
+  }
+  return String(value).toLowerCase().trim();
+}
+
+/** Fuzzy URL normalization: strip scheme, www., leading wildcards,
+ * trailing slashes and lowercase. Makes "http://www.example.com/" and
+ * "*.example.com" match so comparable rows line up.*/
+function normalizeUrlForMatch(url: string): string {
+  let u = url.toLowerCase().trim();
+  u = u.replace(/^https?:\/\//, "");
+  u = u.replace(/^\*\./, "");
+  u = u.replace(/^www\./, "");
+  u = u.replace(/\/+$/, "");
+  return u;
+}
+
 function entryMatchKey(entry: CollectionEntry, matchByUrl: boolean, collectionKey: string): string {
-  // For web filter category entries (ftgd-wf.filters), prioritize category over id
-  // since IDs can differ across profiles but categories represent the same thing
+  // For web filter category entries (ftgd-wf.filters), prioritize category name
+  // over id — ids can differ across profiles but category names are stable.
   const isFtgdFilter = collectionKey.includes("ftgd-wf") || collectionKey.includes("filters");
-  if (isFtgdFilter && entry.category !== undefined && entry.category !== null)
-    return `cat:${normalizeForCompare(entry.category)}`;
+  if (isFtgdFilter && entry.category !== undefined && entry.category !== null) {
+    const token = categoryMatchToken(entry.category);
+    if (token) return `cat:${token}`;
+  }
+  // URL-filter entries: align by normalized URL first when toggle is on so
+  // similar URLs across profiles line up for comparison.
+  if (matchByUrl && typeof entry.url === "string") {
+    return `url:${normalizeUrlForMatch(entry.url)}`;
+  }
   if (entry.id !== undefined && entry.id !== null) return `id:${entry.id}`;
   if (typeof entry.name === "string") return `name:${entry.name}`;
   if (entry.category !== undefined && entry.category !== null)
-    return `cat:${normalizeForCompare(entry.category)}`;
-  if (matchByUrl && typeof entry.url === "string") return `url:${entry.url}`;
+    return `cat:${categoryMatchToken(entry.category) || normalizeForCompare(entry.category)}`;
   if (entry.rule !== undefined) return `rule:${normalizeForCompare(entry.rule)}`;
   return "";
 }
@@ -289,6 +342,72 @@ function isDefaultValue(
   const defVal = defaults[key];
   if (defVal === undefined) return false;
   return normalizeForCompare(value) === normalizeForCompare(defVal);
+}
+
+// ---------------------------------------------------------------------------
+// NestedObjectTable — render an array-of-objects (e.g. SD-WAN sla list,
+// nested DLP entries) as a compact table inside a parent row's cell.
+// ---------------------------------------------------------------------------
+function NestedObjectTable({ rows }: { rows: Record<string, unknown>[] }) {
+  // Collect every column from every row, hiding identifier noise.
+  const columns = useMemo(() => {
+    const seen = new Set<string>();
+    for (const row of rows) {
+      for (const key of Object.keys(row)) {
+        if (!HIDDEN_ENTRY_KEYS.has(key)) seen.add(key);
+      }
+    }
+    return sortEntryKeys([...seen]);
+  }, [rows]);
+
+  return (
+    <div className="rounded-md border border-slate-700/50 overflow-hidden scc-fade-in">
+      <table className="w-full text-[11px] border-collapse">
+        <thead>
+          <tr className="bg-slate-800/60">
+            {columns.map((col) => (
+              <th
+                key={col}
+                className="px-1.5 py-1 text-left font-semibold uppercase tracking-wide text-slate-500 border-b border-slate-700/40 text-[10px] whitespace-nowrap"
+              >
+                {humanizeKey(col)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr
+              key={i}
+              className="border-b border-slate-800/40 last:border-0 hover:bg-slate-800/20"
+            >
+              {columns.map((col) => {
+                const cell = row[col];
+                if (isActionKey(col)) {
+                  return (
+                    <td key={col} className="px-1.5 py-1 align-top">
+                      <ActionBadge value={formatValue(cell)} />
+                    </td>
+                  );
+                }
+                return (
+                  <td
+                    key={col}
+                    className="px-1.5 py-1 align-top text-slate-300 break-words"
+                  >
+                    {formatValue(cell)}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="px-1.5 py-0.5 text-[10px] text-slate-600 bg-slate-900/40 border-t border-slate-800/30">
+        {rows.length} {rows.length === 1 ? "entry" : "entries"}
+      </div>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -441,6 +560,8 @@ function MatchedEntryRow({
                             </span>
                           ) : isAction ? (
                             <ActionBadge value={formatValue(val)} />
+                          ) : isObjectArray(val) ? (
+                            <NestedObjectTable rows={val} />
                           ) : (
                             <SmartValue
                               value={val}
@@ -483,20 +604,35 @@ function MatchedEntryRow({
 // ---------------------------------------------------------------------------
 // Action colour helpers
 // ---------------------------------------------------------------------------
+// Action-to-colour mapping. Text colour uses the lightest shade in each
+// palette so contrast against the dark translucent background stays high.
+const RED = { bg: "bg-red-900/70", text: "text-red-100", border: "border-red-700/70" };
+const GREEN = { bg: "bg-emerald-900/70", text: "text-emerald-100", border: "border-emerald-700/70" };
+const BLUE = { bg: "bg-blue-900/70", text: "text-blue-100", border: "border-blue-700/70" };
+const ORANGE = { bg: "bg-orange-900/70", text: "text-orange-100", border: "border-orange-700/70" };
+const GREY = { bg: "bg-slate-700/70", text: "text-slate-100", border: "border-slate-500/70" };
+
 const ACTION_COLORS: Record<string, { bg: string; text: string; border: string }> = {
-  block: { bg: "bg-red-950/60", text: "text-red-300", border: "border-red-800/60" },
-  deny: { bg: "bg-red-950/60", text: "text-red-300", border: "border-red-800/60" },
-  drop: { bg: "bg-red-950/60", text: "text-red-300", border: "border-red-800/60" },
-  reject: { bg: "bg-red-950/60", text: "text-red-300", border: "border-red-800/60" },
-  allow: { bg: "bg-emerald-950/60", text: "text-emerald-300", border: "border-emerald-800/60" },
-  pass: { bg: "bg-emerald-950/60", text: "text-emerald-300", border: "border-emerald-800/60" },
-  accept: { bg: "bg-emerald-950/60", text: "text-emerald-300", border: "border-emerald-800/60" },
-  monitor: { bg: "bg-blue-950/60", text: "text-blue-300", border: "border-blue-800/60" },
-  warning: { bg: "bg-blue-950/60", text: "text-blue-300", border: "border-blue-800/60" },
-  authenticate: { bg: "bg-blue-950/60", text: "text-blue-300", border: "border-blue-800/60" },
-  exempt: { bg: "bg-slate-800/60", text: "text-slate-400", border: "border-slate-700/60" },
+  // red — blocked / denied / dropped / rejected
+  block: RED, blocked: RED,
+  deny: RED, denied: RED,
+  drop: RED, dropped: RED,
+  reject: RED, rejected: RED,
+  // green — allowed / permitted / accepted
+  allow: GREEN, allowed: GREEN,
+  permit: GREEN, permitted: GREEN,
+  pass: GREEN, accept: GREEN, accepted: GREEN,
+  // blue — monitor
+  monitor: BLUE, monitored: BLUE, log: BLUE, observe: BLUE,
+  // orange — warn / warning / alert
+  warn: ORANGE, warning: ORANGE, alert: ORANGE, notify: ORANGE,
+  // grey — exempt / skip / ignore / bypass
+  exempt: GREY, exempted: GREY,
+  skip: GREY, skipped: GREY,
+  ignore: GREY, ignored: GREY,
+  bypass: GREY, bypassed: GREY,
 };
-const ACTION_DEFAULT = { bg: "bg-amber-950/50", text: "text-amber-300", border: "border-amber-800/60" };
+const ACTION_DEFAULT = { bg: "bg-amber-950/50", text: "text-amber-100", border: "border-amber-700/60" };
 
 function getActionStyle(val: string) {
   const lower = val.toLowerCase().trim();
