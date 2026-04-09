@@ -127,7 +127,7 @@ export default function ProfileDashboard({ types, onSelectType }: Props) {
         <div>
           <h3 className="text-lg font-semibold text-white">Reference Catalogs</h3>
           <p className="text-sm text-slate-500">
-            Search the full application and IPS signature catalogs that drive profile entries.
+            Search the full application, IPS, and DLP catalogs that drive profile entries.
           </p>
         </div>
 
@@ -149,6 +149,57 @@ export default function ProfileDashboard({ types, onSelectType }: Props) {
             <h4 className="text-base font-semibold text-white">IPS Signatures</h4>
             <p className="mt-2 text-sm text-slate-500">
               Inspect the FortiManager IPS rule catalog and use it as a reference during comparison work.
+            </p>
+          </Link>
+
+          <Link
+            href="/reference/dlp-sensors"
+            className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 transition-all duration-200 hover:border-purple-700 hover:bg-slate-900"
+          >
+            <h4 className="text-base font-semibold text-white">DLP Sensors</h4>
+            <p className="mt-2 text-sm text-slate-500">
+              Browse every DLP sensor configured in FMG, including filter rules and actions.
+            </p>
+          </Link>
+
+          <Link
+            href="/reference/dlp-dictionaries"
+            className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 transition-all duration-200 hover:border-purple-700 hover:bg-slate-900"
+          >
+            <h4 className="text-base font-semibold text-white">DLP Dictionaries</h4>
+            <p className="mt-2 text-sm text-slate-500">
+              Inspect DLP dictionary definitions and their pattern entries used by sensor rules.
+            </p>
+          </Link>
+
+          <Link
+            href="/reference/dlp-data-types"
+            className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 transition-all duration-200 hover:border-purple-700 hover:bg-slate-900"
+          >
+            <h4 className="text-base font-semibold text-white">DLP Data Types</h4>
+            <p className="mt-2 text-sm text-slate-500">
+              Reference the predefined DLP data types FortiManager exposes for sensor matching.
+            </p>
+          </Link>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <div>
+          <h3 className="text-lg font-semibold text-white">Tools</h3>
+          <p className="text-sm text-slate-500">
+            Vendor config converters, parsers, and migration utilities — Palo Alto and others to be added here.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Link
+            href="/tools"
+            className="rounded-xl border border-dashed border-slate-800 bg-slate-900/40 p-5 transition-all duration-200 hover:border-slate-600 hover:bg-slate-900/60"
+          >
+            <h4 className="text-base font-semibold text-slate-300">All Tools →</h4>
+            <p className="mt-2 text-sm text-slate-500">
+              Placeholder for upcoming tooling — Palo Alto config → CSV / Excel / SQLite parsers and other vendor migration helpers will land here.
             </p>
           </Link>
         </div>
