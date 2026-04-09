@@ -47,10 +47,27 @@ function formatValue(value: unknown): string {
   return String(value);
 }
 
+function canonicalStringify(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) {
+    return "[" + value.map(canonicalStringify).join(",") + "]";
+  }
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const keys = Object.keys(obj).sort();
+    return (
+      "{" +
+      keys.map((k) => JSON.stringify(k) + ":" + canonicalStringify(obj[k])).join(",") +
+      "}"
+    );
+  }
+  return JSON.stringify(value);
+}
+
 function normalizeForCompare(value: unknown): string {
   if (value === null || value === undefined) return "";
   if (isResolvedValue(value)) return String(value.raw);
-  if (typeof value === "object") return JSON.stringify(value);
+  if (typeof value === "object") return canonicalStringify(value);
   return String(value);
 }
 
@@ -344,6 +361,16 @@ export default function StructuredCollectionComparison({
 
   const label = humanizeKey(collectionKey);
 
+  // Extract entry-level defaults from the full profile defaults object
+  const entryDefaults = useMemo(() => {
+    if (!defaults) return undefined;
+    const col = defaults[collectionKey];
+    if (Array.isArray(col) && col.length > 0 && typeof col[0] === "object") {
+      return col[0] as Record<string, unknown>;
+    }
+    return undefined;
+  }, [defaults, collectionKey]);
+
   const matchedRows = useMemo(
     () => matchEntries(profileNames, rawProfiles, collectionKey),
     [profileNames, rawProfiles, collectionKey],
@@ -463,7 +490,7 @@ export default function StructuredCollectionComparison({
             row={row}
             profileNames={profileNames}
             hideDefaults={hideDefaults}
-            defaults={defaults}
+            defaults={entryDefaults}
             forceExpanded={expandState}
           />
         ))}

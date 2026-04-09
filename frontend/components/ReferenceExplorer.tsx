@@ -73,6 +73,30 @@ function matchesFilter(value: string, rule: FilterRule): boolean {
   }
 }
 
+function HighlightText({ text, query }: { text: string; query: string }) {
+  if (!query.trim()) return <>{text}</>;
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let parts: string[];
+  try {
+    parts = text.split(new RegExp(`(${escaped})`, "gi"));
+  } catch {
+    return <>{text}</>;
+  }
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.toLowerCase() === query.toLowerCase() ? (
+          <mark key={i} className="bg-cyan-500/30 text-current rounded-sm">
+            {part}
+          </mark>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </>
+  );
+}
+
 export default function ReferenceExplorer({ kind, title, description }: Props) {
   const [data, setData] = useState<ReferenceListResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -325,7 +349,7 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
                       {columns.map((column) => (
                         <td key={column} className="px-3 py-2.5 align-top">
                           <div className="max-w-[22rem] whitespace-pre-wrap break-words text-xs leading-5 text-slate-200">
-                            {formatValue(item[column])}
+                            <HighlightText text={formatValue(item[column])} query={deferredSearch} />
                           </div>
                         </td>
                       ))}

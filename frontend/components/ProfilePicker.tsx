@@ -3,6 +3,30 @@
 import { useMemo, useState } from "react";
 import { ProfileType } from "@/lib/api";
 
+function HighlightText({ text, query }: { text: string; query: string }) {
+  if (!query.trim()) return <>{text}</>;
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let parts: string[];
+  try {
+    parts = text.split(new RegExp(`(${escaped})`, "gi"));
+  } catch {
+    return <>{text}</>;
+  }
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.toLowerCase() === query.toLowerCase() ? (
+          <mark key={i} className="bg-cyan-500/30 text-current rounded-sm">
+            {part}
+          </mark>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </>
+  );
+}
+
 interface Props {
   profileType: ProfileType;
   profiles: string[];
@@ -125,7 +149,7 @@ export default function ProfilePicker({
                     }`}
                     title={name}
                   >
-                    {name}
+                    <HighlightText text={name} query={search} />
                   </span>
                 </div>
               </button>
