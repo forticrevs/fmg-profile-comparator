@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, useEffect } from "react";
+import ActionBadge, { isActionKey } from "@/components/ActionBadge";
 
 /* ------------------------------------------------------------------ */
 /* Fade-in animation style (injected once)                             */
@@ -598,64 +599,6 @@ function MatchedEntryRow({
         </div>
       )}
     </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Action colour helpers
-// ---------------------------------------------------------------------------
-// Action-to-colour mapping. Text colour uses the lightest shade in each
-// palette so contrast against the dark translucent background stays high.
-const RED = { bg: "bg-red-900/70", text: "text-red-100", border: "border-red-700/70" };
-const GREEN = { bg: "bg-emerald-900/70", text: "text-emerald-100", border: "border-emerald-700/70" };
-const BLUE = { bg: "bg-blue-900/70", text: "text-blue-100", border: "border-blue-700/70" };
-const ORANGE = { bg: "bg-orange-900/70", text: "text-orange-100", border: "border-orange-700/70" };
-const GREY = { bg: "bg-slate-700/70", text: "text-slate-100", border: "border-slate-500/70" };
-
-const ACTION_COLORS: Record<string, { bg: string; text: string; border: string }> = {
-  // red — blocked / denied / dropped / rejected
-  block: RED, blocked: RED,
-  deny: RED, denied: RED,
-  drop: RED, dropped: RED,
-  reject: RED, rejected: RED,
-  // green — allowed / permitted / accepted
-  allow: GREEN, allowed: GREEN,
-  permit: GREEN, permitted: GREEN,
-  pass: GREEN, accept: GREEN, accepted: GREEN,
-  // blue — monitor
-  monitor: BLUE, monitored: BLUE, log: BLUE, observe: BLUE,
-  // orange — warn / warning / alert
-  warn: ORANGE, warning: ORANGE, alert: ORANGE, notify: ORANGE,
-  // grey — exempt / skip / ignore / bypass
-  exempt: GREY, exempted: GREY,
-  skip: GREY, skipped: GREY,
-  ignore: GREY, ignored: GREY,
-  bypass: GREY, bypassed: GREY,
-};
-const ACTION_DEFAULT = { bg: "bg-amber-950/50", text: "text-amber-100", border: "border-amber-700/60" };
-
-function getActionStyle(val: string) {
-  const lower = val.toLowerCase().trim();
-  return ACTION_COLORS[lower] ?? ACTION_DEFAULT;
-}
-
-function isActionKey(key: string): boolean {
-  const l = key.toLowerCase();
-  return l === "action" || l === "default-action";
-}
-
-// ---------------------------------------------------------------------------
-// ActionBadge for inline use
-// ---------------------------------------------------------------------------
-function ActionBadge({ value }: { value: string }) {
-  if (!value || value === "—") return <span className="text-slate-600">—</span>;
-  const style = getActionStyle(value);
-  return (
-    <span
-      className={`inline-block rounded-full border px-2 py-0.5 text-[11px] font-medium ${style.bg} ${style.text} ${style.border}`}
-    >
-      {value}
-    </span>
   );
 }
 

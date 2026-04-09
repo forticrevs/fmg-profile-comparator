@@ -18,6 +18,7 @@ import {
   fetchDlpDataTypes,
   ReferenceListResponse,
 } from "@/lib/api";
+import SharedActionBadge from "@/components/ActionBadge";
 
 type ReferenceKind =
   | "application-signatures"
@@ -295,19 +296,9 @@ function NestedTable({
 }
 
 /* ------------------------------------------------------------------ */
-/* Action badge component                                              */
+/* Action badge — re-exported from shared ActionBadge module           */
 /* ------------------------------------------------------------------ */
-function ActionBadge({ value }: { value: string }) {
-  if (value === "—") return <span className="text-slate-600">—</span>;
-  const style = getActionStyle(value);
-  return (
-    <span
-      className={`inline-block rounded-full border px-2 py-0.5 text-[11px] font-medium ${style.bg} ${style.text} ${style.border}`}
-    >
-      {value}
-    </span>
-  );
-}
+const ActionBadge = SharedActionBadge;
 
 /* ------------------------------------------------------------------ */
 /* Severity badge component                                            */

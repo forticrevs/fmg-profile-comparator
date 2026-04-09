@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { ComparisonField, togglePin } from "@/lib/api";
 import StructuredCollectionComparison from "@/components/StructuredCollectionComparison";
+import ActionBadge, { isActionKey } from "@/components/ActionBadge";
 
 interface Props {
   profileType: string;
@@ -313,25 +314,32 @@ export default function ComparisonTable({
         </td>
         {profileNames.map((name) => {
           const fv = formatValue(field.values[name]);
+          const isMissing = field.values[name] === "__MISSING__";
+          const renderAsAction =
+            !isMissing && isActionKey(field.field_path) && fv.text !== "null";
           return (
             <td
               key={name}
               className="px-2 py-1 align-top overflow-hidden"
               title={fv.tooltip}
             >
-              <span
-                className={
-                  field.values[name] === "__MISSING__"
-                    ? "block whitespace-pre-wrap break-all text-slate-600 italic"
-                    : fv.resolved
-                    ? "block whitespace-pre-wrap break-all text-cyan-300"
-                    : field.in_sync
-                    ? "block whitespace-pre-wrap break-all text-slate-400"
-                    : "block whitespace-pre-wrap break-all text-slate-200"
-                }
-              >
-                {fv.text}
-              </span>
+              {renderAsAction ? (
+                <ActionBadge value={fv.text} />
+              ) : (
+                <span
+                  className={
+                    isMissing
+                      ? "block whitespace-pre-wrap break-all text-slate-600 italic"
+                      : fv.resolved
+                      ? "block whitespace-pre-wrap break-all text-cyan-300"
+                      : field.in_sync
+                      ? "block whitespace-pre-wrap break-all text-slate-400"
+                      : "block whitespace-pre-wrap break-all text-slate-200"
+                  }
+                >
+                  {fv.text}
+                </span>
+              )}
             </td>
           );
         })}
