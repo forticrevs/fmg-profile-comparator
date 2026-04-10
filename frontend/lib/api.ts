@@ -306,3 +306,82 @@ export async function fetchDlpDataTypes(): Promise<ReferenceListResponse> {
   if (!res.ok) throw new Error("Failed to fetch DLP data types");
   return res.json();
 }
+
+// ---------------------------------------------------------------------------
+// Tools — PAN XML extraction
+// ---------------------------------------------------------------------------
+
+export interface PanParser {
+  id: string;
+  label: string;
+  description: string;
+}
+
+export interface PanExtractResult {
+  status: string;
+  parsers: { parser: string; status: string; files?: string[]; error?: string }[];
+  files: string[];
+  archive: string | null;
+}
+
+export interface JobStatus {
+  job_id: string;
+  status: "queued" | "in_progress" | "complete" | "not_found";
+  result: PanExtractResult | null;
+  error: string | null;
+}
+
+export async function fetchPanParsers(): Promise<PanParser[]> {
+  const res = await authFetch(`${API_BASE}/api/tools/pan-xml/parsers`);
+  if (!res.ok) throw new Error("Failed to fetch PAN parsers");
+  const data = await res.json();
+  return data.parsers;
+}
+
+export async function submitPanExtract(
+  file: File,
+  parserIds: string[]
+): Promise<{ job_id: string; parsers: string[] }> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("parsers", parserIds.join(","));
+  const res = await authFetch(`${API_BASE}/api/tools/pan-xml/extract`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || "Failed to submit extraction job");
+  }
+  return res.json();
+}
+
+export async function fetchJobStatus(jobId: string): Promise<JobStatus> {
+  const res = await authFetch(`${API_BASE}/api/jobs/${jobId}`);
+  if (!res.ok) throw new Error("Failed to fetch job status");
+  return res.json();
+}
+
+/**
+ * Build an authenticated URL for downloading a job artifact. The frontend
+ * can't set Authorization headers on a plain <a href> click, so we fetch the
+ * file as a blob and trigger a synthetic download.
+ */
+export async function downloadJobArtifact(
+  jobId: string,
+  filename: string
+): Promise<void> {
+  const res = await authFetch(
+    `${API_BASE}/api/jobs/${jobId}/artifact/${encodeURIComponent(filename)}`
+  );
+  if (!res.ok) throw new Error("Failed to download artifact");
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

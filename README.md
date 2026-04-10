@@ -28,6 +28,27 @@ trips a loud alert.
 | DLP Profile | Security Profiles > DLP | `dlp` |
 | SD-WAN Template | SD-WAN > Templates | `sdwan` |
 
+## Tools — Palo Alto → Fortinet migration
+
+Beyond profile comparison, the app hosts a growing set of vendor migration
+utilities under `/tools`. The first of these is **PAN XML Extraction**: upload
+a single Palo Alto `running-config.xml`, pick which extractors to run, and get
+back CSV / XLSX / FortiGate CLI artifacts for the pieces you care about.
+
+| Extractor | Output | Purpose |
+|-----------|--------|---------|
+| Security Rules | `security-rules.csv` | Flat rulebase (zones, src/dst, action, profile group) |
+| Profile Groups | `profile-groups.csv` | Profile-group → member profile map |
+| Application Groups | `app-groups.xlsx` | One column per app-group, members listed vertically |
+| Custom URL Categories | `custom-url-categories.csv` | One row per `(category, URL)` pair |
+| URL Filter Profiles | `url-filter-profiles.xlsx` + `url-filter-all-categories.xlsx` | Per-profile alert/block sheets + unified category → profiles index |
+| SSL Decryption Rules | `ssl-decryption-rules.csv` | Decryption policy with category, service, action, profile |
+| Wildcard Address Objects | `wildcard-objects.ftnt.txt` | PAN `ip-wildcard` values converted to FortiGate complement-form `config firewall address` blocks |
+
+All selected extractors run against a single parsed tree, their outputs are
+dropped into a per-user job directory, and everything is bundled into a
+`pan-extract-<job_id>.zip` for convenience.
+
 ## Architecture
 
 ```
@@ -55,6 +76,8 @@ trips a loud alert.
 │    profiles      list/detail/compare/pins        │
 │    reference     app sigs, ips sigs, dlp dicts   │
 │    settings      multi-FMG instance CRUD         │
+│    jobs          ARQ job status + artifact dl    │
+│    tools_pan     PAN XML extraction entrypoint   │
 │  services/                                        │
 │    fmg_client      JSON-RPC client + session     │
 │    fmg_registry    multi-instance registry       │
@@ -63,10 +86,22 @@ trips a loud alert.
 │    pin_store       per-type pin persistence      │
 │    user_store      bcrypt user store             │
 │    auth            session tokens                │
+│    pan_parsers/    self-registering PAN          │
+│                    XML → CSV/XLSX/FGT parsers    │
+│  jobs/                                            │
+│    worker.py       arq WorkerSettings            │
+│    queue.py        enqueue/status helpers        │
+│    user_storage.py per-user job dir paths        │
+│    tasks/          pan_extract, ping             │
 └──────────────────────┬────────────────────────────┘
-                       │ JSON-RPC over HTTPS
-                       ▼
-                 FortiManager
+                       │ JSON-RPC over HTTPS      ─┐
+                       ▼                            │
+                 FortiManager                       │
+                                                    │
+┌─ Redis + ARQ worker ──────────────────────────────┘
+│  redis://localhost:6379  (container or host)
+│  $ backend/venv/bin/arq app.jobs.worker.WorkerSettings
+└───────────────────────────────────────────────────
 ```
 
 ## Comparator engine — how it works
@@ -146,6 +181,10 @@ All routes are cookie-authenticated (set on `/api/auth/login`).
 | `GET` | `/api/reference/dlp-sensors` | DLP sensors |
 | `GET` | `/api/reference/dlp-dictionaries` | DLP dictionaries |
 | `GET` | `/api/reference/dlp-data-types` | DLP data types |
+| `GET` | `/api/tools/pan-xml/parsers` | List available PAN extractors |
+| `POST` | `/api/tools/pan-xml/extract` | Multipart upload — enqueues a `pan_extract` job |
+| `GET` | `/api/jobs/{job_id}` | Poll job status + result |
+| `GET` | `/api/jobs/{job_id}/artifact/{filename}` | Download a per-job artifact file |
 
 The compare endpoint returns:
 ```jsonc
@@ -167,6 +206,10 @@ Backend state is plain JSON files next to the backend (gitignored):
 - `backend/pin_store.json` — `{ profile_type: [field_path, ...] }`
 - `backend/fmg_instances.json` — encrypted FMG credentials
 - `backend/.fmg_key` — Fernet key used to encrypt the above
+- `backend/user_data/<username>/jobs/<job_id>/` — per-user tool job outputs
+  (parser CSVs/XLSX, bundled zip). Source uploads land in
+  `backend/user_data/<username>/uploads/` and are deleted as soon as the job
+  finishes.
 
 Frontend state lives in `localStorage`:
 
@@ -176,14 +219,23 @@ Frontend state lives in `localStorage`:
 
 ## Quick start
 
-Prereqs: Python 3.10+, Node 18+, a FortiManager with JSON-RPC API access.
+Prereqs: Python 3.10+, Node 18+, a FortiManager with JSON-RPC API access, and
+Docker or Podman (for Redis — only needed if you want to use the `/tools`
+migration utilities; core profile comparison works without it).
 
 ```bash
-# Backend
+# Redis (needed for /tools job queue)
+./scripts/start-redis.sh
+
+# Backend API
 cd backend
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
+
+# ARQ worker (separate shell, needed for /tools)
+cd backend
+venv/bin/arq app.jobs.worker.WorkerSettings
 
 # Frontend (separate shell)
 cd frontend

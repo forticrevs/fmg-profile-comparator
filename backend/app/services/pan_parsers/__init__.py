@@ -48,15 +48,18 @@ def list_parsers() -> list[dict[str, str]]:
     ]
 
 
-# Side-effect imports so parser modules self-register. Uncomment each
-# line as the corresponding parser is ported. The import order here also
+# Side-effect imports so parser modules self-register. Import order
 # drives the default display order in the frontend.
 #
-# from app.services.pan_parsers import security_rules            # noqa: F401
-# from app.services.pan_parsers import profile_groups            # noqa: F401
-# from app.services.pan_parsers import app_groups                # noqa: F401
-# from app.services.pan_parsers import custom_url_categories     # noqa: F401
-# from app.services.pan_parsers import url_filter_profiles       # noqa: F401
-# from app.services.pan_parsers import ssl_decryption_rules      # noqa: F401
-# from app.services.pan_parsers import wildcard_objects          # noqa: F401
-# from app.services.pan_parsers import ssl_decrypt_analysis      # noqa: F401
+# Note: `pan_analyze_ssl_decrypt_diffs.py` is intentionally NOT ported
+# into this registry — it's a post-processor that merges multiple
+# already-extracted SSL-decrypt CSVs from different PAN configs, not a
+# parser of the raw XML. It belongs in a follow-up "diff two extracts"
+# sub-tool with its own multi-file upload UX.
+from app.services.pan_parsers import security_rules          # noqa: E402, F401
+from app.services.pan_parsers import profile_groups          # noqa: E402, F401
+from app.services.pan_parsers import app_groups              # noqa: E402, F401
+from app.services.pan_parsers import custom_url_categories   # noqa: E402, F401
+from app.services.pan_parsers import url_filter_profiles     # noqa: E402, F401
+from app.services.pan_parsers import ssl_decryption_rules    # noqa: E402, F401
+from app.services.pan_parsers import wildcard_objects        # noqa: E402, F401

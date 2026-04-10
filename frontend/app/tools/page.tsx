@@ -15,28 +15,42 @@ export default function ToolsPage() {
           </Link>
           <h1 className="mt-3 text-2xl font-bold text-white">Tools</h1>
           <p className="mt-1 text-sm text-slate-500 max-w-2xl">
-            Vendor config converters, parsers, and migration utilities. This is
-            a placeholder section — existing scripts will be ported in here over
-            time.
+            Vendor config converters, parsers, and migration utilities.
           </p>
         </div>
 
         <section className="space-y-3">
           <h2 className="text-base font-semibold text-slate-300">
-            Coming soon
+            Palo Alto → Fortinet
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Link
+              href="/tools/pan-xml"
+              className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 hover:border-cyan-500/40 hover:bg-cyan-500/5 transition group"
+            >
+              <h3 className="text-sm font-semibold text-slate-200 group-hover:text-cyan-300">
+                PAN XML Extraction
+              </h3>
+              <p className="mt-2 text-xs text-slate-500 leading-relaxed">
+                Upload a Palo Alto <code>running-config.xml</code> and run the
+                extractors you need: security rules, profile groups,
+                application groups, custom URL categories, URL filter
+                profiles, SSL decryption rules, and wildcard address objects
+                converted to FortiGate CLI.
+              </p>
+              <span className="mt-3 inline-block text-[10px] uppercase tracking-wide text-cyan-500">
+                Open tool →
+              </span>
+            </Link>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-base font-semibold text-slate-300">Coming soon</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <PlaceholderCard
-              title="Palo Alto → CSV"
-              description="Parse a Palo Alto firewall config (XML / set commands) into per-object CSV files: rules, addresses, services, profiles."
-            />
-            <PlaceholderCard
-              title="Palo Alto → Excel"
-              description="Same parser, multi-sheet Excel workbook output with one tab per object class for easier review and triage."
-            />
-            <PlaceholderCard
-              title="Palo Alto → SQLite"
-              description="Normalize a PAN config into a queryable SQLite database so you can join across rules, address groups, and zones."
+              title="PAN config diff"
+              description="Compare two extracted PAN configs side-by-side — highlight rule, profile, and app-group changes across a snapshot window."
             />
             <PlaceholderCard
               title="More vendors"
@@ -44,11 +58,6 @@ export default function ToolsPage() {
             />
           </div>
         </section>
-
-        <p className="text-[11px] text-slate-700">
-          Nothing wired up yet — drop a tool spec or paste an existing script to
-          get it added.
-        </p>
       </div>
     </main>
   );

@@ -49,7 +49,7 @@ class PinnedFieldsResponse(BaseModel):
 
 
 class ReferenceListResponse(BaseModel):
-    """A searchable reference dataset fetched from FortiManager."""
+    """List of reference data items (application signatures, IPS rules, etc.)."""
     reference_type: str
     count: int
     items: list[dict[str, Any]]
