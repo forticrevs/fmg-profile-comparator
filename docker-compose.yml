@@ -1,0 +1,31 @@
+# Local infra for the revamped profile mgmt app.
+#
+# Currently runs only Redis, which backs the ARQ job queue used by the
+# /tools conversion utilities. The FastAPI backend and Next.js frontend
+# still run on the host (in the backend/venv and frontend/ respectively);
+# they connect to Redis at localhost:6379.
+#
+# Usage:
+#   docker compose up -d redis     # start
+#   docker compose ps              # check
+#   docker compose logs -f redis   # tail
+#   docker compose down            # stop (data persists in named volume)
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: fmg-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis-data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  redis-data:
