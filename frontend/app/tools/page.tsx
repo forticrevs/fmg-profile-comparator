@@ -46,12 +46,31 @@ export default function ToolsPage() {
         </section>
 
         <section className="space-y-3">
+          <h2 className="text-base font-semibold text-slate-300">Diff</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Link
+              href="/tools/diff"
+              className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 hover:border-cyan-500/40 hover:bg-cyan-500/5 transition group"
+            >
+              <h3 className="text-sm font-semibold text-slate-200 group-hover:text-cyan-300">
+                Diff utility
+              </h3>
+              <p className="mt-2 text-xs text-slate-500 leading-relaxed">
+                Upload 2–6 text or structured config files (txt, conf, cfg,
+                json, xml, yaml) and get per-file unified diffs against a
+                chosen baseline. JSON/YAML/XML are canonicalised before diff
+                so key-order churn disappears.
+              </p>
+              <span className="mt-3 inline-block text-[10px] uppercase tracking-wide text-cyan-500">
+                Open tool →
+              </span>
+            </Link>
+          </div>
+        </section>
+
+        <section className="space-y-3">
           <h2 className="text-base font-semibold text-slate-300">Coming soon</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <PlaceholderCard
-              title="PAN config diff"
-              description="Compare two extracted PAN configs side-by-side — highlight rule, profile, and app-group changes across a snapshot window."
-            />
             <PlaceholderCard
               title="More vendors"
               description="Cisco ASA / FTD, Check Point, and other vendor parsers will live here as the tooling is ported in."

@@ -385,3 +385,62 @@ export async function downloadJobArtifact(
   a.remove();
   URL.revokeObjectURL(url);
 }
+
+// ---------------------------------------------------------------------------
+// Tools — Diff utility
+// ---------------------------------------------------------------------------
+
+export interface DiffLimits {
+  max_file_bytes: number;
+  max_total_bytes: number;
+  max_file_count: number;
+  min_file_count: number;
+  allowed_extensions: string[];
+}
+
+export interface DiffFileMeta {
+  name: string;
+  size: number;
+  sha256: string;
+  format: "text" | "json" | "xml" | "yaml";
+}
+
+export interface DiffPair {
+  index: number;
+  name: string;
+  unified: string;
+  added: number;
+  removed: number;
+  truncated: boolean;
+}
+
+export interface DiffCompareResult {
+  format: "text" | "json" | "xml" | "yaml";
+  baseline_index: number;
+  files: DiffFileMeta[];
+  diffs: DiffPair[];
+}
+
+export async function fetchDiffLimits(): Promise<DiffLimits> {
+  const res = await authFetch(`${API_BASE}/api/tools/diff/limits`);
+  if (!res.ok) throw new Error("Failed to fetch diff limits");
+  return res.json();
+}
+
+export async function submitDiffCompare(
+  files: File[],
+  baselineIndex: number,
+): Promise<DiffCompareResult> {
+  const form = new FormData();
+  for (const f of files) form.append("files", f);
+  form.append("baseline_index", String(baselineIndex));
+  const res = await authFetch(`${API_BASE}/api/tools/diff/compare`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || "Diff failed");
+  }
+  return res.json();
+}
