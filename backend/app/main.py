@@ -5,7 +5,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import profiles, reference, auth, settings, jobs, tools_pan, tools_diff
+from app.routers import (
+    profiles,
+    reference,
+    auth,
+    settings,
+    jobs,
+    tools_pan,
+    tools_diff,
+    tools_policy_viewer,
+)
 
 
 @asynccontextmanager
@@ -36,6 +45,7 @@ app.include_router(settings.router)
 app.include_router(jobs.router)
 app.include_router(tools_pan.router)
 app.include_router(tools_diff.router)
+app.include_router(tools_policy_viewer.router)
 
 
 @app.get("/api/health")
