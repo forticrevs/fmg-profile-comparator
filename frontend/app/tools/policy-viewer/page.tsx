@@ -958,14 +958,20 @@ export default function PolicyViewerPage() {
 
   const filteredPolicies = useMemo(() => {
     // Flatten a cell value to a lowercased search haystack. Hit-count
-    // column is synthetic — its needle is the raw hitcount number, so
-    // filters like `>1000` won't work but `0` and exact numbers will.
+    // and bytes columns are synthetic — their needle is the raw number
+    // looked up from the hitcount map, so filters like `>1000` won't
+    // work but `0` and exact numbers will. (The filter row doesn't even
+    // render inputs for these columns today, but the branch is kept so
+    // programmatic filters stay predictable.)
     const haystack = (p: PolicyRow, key: string): string => {
-      if (key === HITS_COLUMN_KEY) {
+      if (key === HITS_COLUMN_KEY || key === BYTES_COLUMN_KEY) {
         const pidKey = p.policyid != null ? String(p.policyid) : null;
         const hc =
           pidKey != null && hitcounts ? hitcounts[pidKey] : undefined;
-        return hc ? String(hc.hitcount) : "";
+        if (!hc) return "";
+        return key === HITS_COLUMN_KEY
+          ? String(hc.hitcount)
+          : String(hc.byte);
       }
       const v = p[key];
       if (v == null || v === "") return "";
@@ -1238,6 +1244,7 @@ interface ColumnSpec {
  *  the raw policy object. Kept as a regular column key so it can be
  *  toggled / resized / filtered like anything else. */
 const HITS_COLUMN_KEY = "hits";
+const BYTES_COLUMN_KEY = "bytes";
 
 const BUILTIN_COLUMNS: Record<string, Omit<ColumnSpec, "key">> = {
   policyid: {
@@ -1276,6 +1283,12 @@ const BUILTIN_COLUMNS: Record<string, Omit<ColumnSpec, "key">> = {
     minPx: 48,
     filterable: false,
   },
+  [BYTES_COLUMN_KEY]: {
+    label: "Bytes",
+    defaultTrack: "5.5rem",
+    minPx: 56,
+    filterable: false,
+  },
   action: {
     label: "Action",
     defaultTrack: "4.5rem",
@@ -1297,6 +1310,7 @@ const DEFAULT_COLUMN_KEYS: string[] = [
   "dstaddr",
   "service",
   HITS_COLUMN_KEY,
+  BYTES_COLUMN_KEY,
   "action",
   "status",
 ];
@@ -1378,6 +1392,76 @@ function formatEpoch(sec: number): string {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Relative-scale colour ramp for hit counts + bytes.
+//
+// A fixed-threshold palette (e.g. "≥1M hits is hot") lies to the operator
+// whenever the package's traffic profile doesn't match the threshold —
+// a tiny ADOM where the busiest policy has 500 hits would paint every
+// row cold. Instead we bucket values relative to the max seen in *this
+// package's* hitcount response, on a log scale so order-of-magnitude
+// spreads (0 → 83M hits on a typical SD-WAN package) bucket meaningfully.
+// ---------------------------------------------------------------------------
+
+const HEAT_BUCKET_COUNT = 5;
+const HEAT_COLOR_CLASSES: readonly string[] = [
+  "text-slate-700", // 0 — cold / zero
+  "text-slate-500", // 1
+  "text-slate-300", // 2 — middle-of-the-pack
+  "text-cyan-300", // 3
+  "text-amber-300", // 4 — hottest in this package
+];
+
+interface HeatScale {
+  /** Max hitcount across every row in the current package's hitcount map. */
+  maxHits: number;
+  /** Max byte count across every row in the current package's hitcount map. */
+  maxBytes: number;
+  /** Relative bucket [0..HEAT_BUCKET_COUNT-1] for a hit value. 0 when
+   *  value is 0 or no hitcount data has been loaded yet. */
+  hitsBucket: (value: number) => number;
+  /** Same idea, for bytes. */
+  bytesBucket: (value: number) => number;
+  /** Tailwind text-colour class for a given bucket. */
+  colorFor: (bucket: number) => string;
+}
+
+function buildHeatScale(
+  hitcounts: Record<string, PolicyHitcount> | null,
+): HeatScale {
+  let maxHits = 0;
+  let maxBytes = 0;
+  if (hitcounts) {
+    for (const hc of Object.values(hitcounts)) {
+      if (hc.hitcount > maxHits) maxHits = hc.hitcount;
+      if (hc.byte > maxBytes) maxBytes = hc.byte;
+    }
+  }
+
+  // Log-normalised bucket. log(x+1) gently maps 0 → 0 and handles the
+  // 0 → millions spread without collapsing everything below the top
+  // decile into "cold".
+  const bucketFor = (value: number, max: number): number => {
+    if (max <= 0 || value <= 0) return 0;
+    const denom = Math.log(max + 1);
+    if (denom <= 0) return 0;
+    const normalized = Math.log(value + 1) / denom;
+    const bucket = Math.floor(normalized * HEAT_BUCKET_COUNT);
+    return Math.min(HEAT_BUCKET_COUNT - 1, Math.max(0, bucket));
+  };
+
+  return {
+    maxHits,
+    maxBytes,
+    hitsBucket: (v) => bucketFor(v, maxHits),
+    bytesBucket: (v) => bucketFor(v, maxBytes),
+    colorFor: (bucket) =>
+      HEAT_COLOR_CLASSES[
+        Math.min(HEAT_BUCKET_COUNT - 1, Math.max(0, bucket))
+      ],
+  };
+}
+
 function PolicyTable({
   rows,
   objectMap,
@@ -1409,6 +1493,12 @@ function PolicyTable({
     () => visibleColumnKeys.map((k) => resolveColumnSpec(k)),
     [visibleColumnKeys],
   );
+
+  // Relative-scale "heat" for Hits + Bytes columns. Recomputed whenever
+  // the hitcount map changes so a package with a 500-hit peak and an
+  // 80M-hit peak both surface their hottest policies with the warm
+  // colour, and their coldest with slate-700.
+  const heatScale = useMemo(() => buildHeatScale(hitcounts), [hitcounts]);
 
   // `1.5rem` is the fixed-width chevron column; every user column
   // follows. When a manual width exists for a key, it overrides the
@@ -1640,18 +1730,29 @@ function PolicyTable({
                   <div className="flex min-w-0 items-center justify-center text-[10px] leading-none text-slate-600">
                     {isOpen ? "▼" : "▶"}
                   </div>
-                  {columns.map((col) => (
-                    <div key={col.key} className="min-w-0 px-3">
-                      <PolicyCell
-                        field={col.key}
-                        value={col.key === HITS_COLUMN_KEY ? hc : row[col.key]}
-                        objectMap={objectMap}
-                        schema={schema}
-                        loadingHitcounts={loadingHitcounts}
-                        hitcountsReady={hitcounts != null}
-                      />
-                    </div>
-                  ))}
+                  {columns.map((col) => {
+                    // Hits + Bytes are synthetic — their "value" is
+                    // looked up in the hitcount map by policyid, not
+                    // sourced from the raw policy object.
+                    const cellValue =
+                      col.key === HITS_COLUMN_KEY ||
+                      col.key === BYTES_COLUMN_KEY
+                        ? hc
+                        : row[col.key];
+                    return (
+                      <div key={col.key} className="min-w-0 px-3">
+                        <PolicyCell
+                          field={col.key}
+                          value={cellValue}
+                          objectMap={objectMap}
+                          schema={schema}
+                          loadingHitcounts={loadingHitcounts}
+                          hitcountsReady={hitcounts != null}
+                          heatScale={heatScale}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
                 {isOpen && (
                   <PolicyDetailPanel
@@ -1677,6 +1778,7 @@ function PolicyCell({
   schema,
   loadingHitcounts,
   hitcountsReady,
+  heatScale,
 }: {
   field: string;
   value: unknown;
@@ -1684,6 +1786,7 @@ function PolicyCell({
   schema: PolicySchema | null;
   loadingHitcounts: boolean;
   hitcountsReady: boolean;
+  heatScale: HeatScale;
 }) {
   // Synthetic hits column — `value` here is the PolicyHitcount record
   // the caller looked up by policyid, not a real field on the policy.
@@ -1692,6 +1795,16 @@ function PolicyCell({
       <HitsCell
         hc={value as PolicyHitcount | undefined}
         loading={loadingHitcounts && !hitcountsReady}
+        heatScale={heatScale}
+      />
+    );
+  }
+  if (field === BYTES_COLUMN_KEY) {
+    return (
+      <BytesCell
+        hc={value as PolicyHitcount | undefined}
+        loading={loadingHitcounts && !hitcountsReady}
+        heatScale={heatScale}
       />
     );
   }
@@ -1799,12 +1912,25 @@ function PolicyCell({
  *  and an em-dash when the refresh has landed but this particular
  *  policyid had no associated record. Full numeric + last-hit goes into
  *  the tooltip so the operator can mouse-over for detail. */
+/** Shared tooltip text for both the Hits and Bytes cells — traffic
+ *  summary plus the last-hit timestamp. */
+function hitTooltip(hc: PolicyHitcount): string {
+  return (
+    `${hc.hitcount.toLocaleString()} hits · ` +
+    `${hc.pkts.toLocaleString()} pkts · ` +
+    `${formatBytes(hc.byte)}\n` +
+    `last hit: ${formatEpoch(hc.last_hit)}`
+  );
+}
+
 function HitsCell({
   hc,
   loading,
+  heatScale,
 }: {
   hc: PolicyHitcount | undefined;
   loading: boolean;
+  heatScale: HeatScale;
 }) {
   if (loading) {
     return (
@@ -1818,23 +1944,49 @@ function HitsCell({
       <div className="min-w-0 text-right font-mono text-slate-700">—</div>
     );
   }
-  const tooltip =
-    `${hc.hitcount.toLocaleString()} hits · ` +
-    `${hc.pkts.toLocaleString()} pkts · ` +
-    `${formatBytes(hc.byte)}\n` +
-    `last hit: ${formatEpoch(hc.last_hit)}`;
-  const color =
-    hc.hitcount === 0
-      ? "text-slate-700"
-      : hc.hitcount >= 1_000_000
-        ? "text-cyan-300"
-        : "text-slate-300";
+  const color = heatScale.colorFor(heatScale.hitsBucket(hc.hitcount));
   return (
     <div
       className={`min-w-0 text-right font-mono tabular-nums ${color}`}
-      title={tooltip}
+      title={hitTooltip(hc)}
     >
       {formatHitCount(hc.hitcount)}
+    </div>
+  );
+}
+
+/** Bytes cell — sibling of HitsCell. Same relative-heat ramp but
+ *  bucketed against max bytes in the package, so a package whose
+ *  busiest policy moves a few GiB shows that policy as hot without
+ *  waiting for the FMG lab's 7 TiB peaks to apply. */
+function BytesCell({
+  hc,
+  loading,
+  heatScale,
+}: {
+  hc: PolicyHitcount | undefined;
+  loading: boolean;
+  heatScale: HeatScale;
+}) {
+  if (loading) {
+    return (
+      <div className="min-w-0 text-right font-mono text-slate-700">
+        <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-slate-600 align-middle" />
+      </div>
+    );
+  }
+  if (!hc) {
+    return (
+      <div className="min-w-0 text-right font-mono text-slate-700">—</div>
+    );
+  }
+  const color = heatScale.colorFor(heatScale.bytesBucket(hc.byte));
+  return (
+    <div
+      className={`min-w-0 text-right font-mono tabular-nums ${color}`}
+      title={hitTooltip(hc)}
+    >
+      {formatBytes(hc.byte)}
     </div>
   );
 }
@@ -1878,14 +2030,15 @@ function ColumnPickerMenu({
   const visibleSet = useMemo(() => new Set(visibleColumns), [visibleColumns]);
 
   // Every key the picker can offer: schema fields + the synthetic
-  // `hits` column + any builtin that's not already in the schema
-  // (defensive — FMG schema should cover all of them).
+  // `hits` / `bytes` columns + any builtin that's not already in the
+  // schema (defensive — FMG schema should cover all of them).
   const availableKeys = useMemo(() => {
     const set = new Set<string>();
     if (schema?.attr) {
       for (const k of Object.keys(schema.attr)) set.add(k);
     }
     set.add(HITS_COLUMN_KEY);
+    set.add(BYTES_COLUMN_KEY);
     for (const k of Object.keys(BUILTIN_COLUMNS)) set.add(k);
     return set;
   }, [schema]);
@@ -1901,20 +2054,22 @@ function ColumnPickerMenu({
       keys.forEach((k) => classified.add(k));
       if (keys.length) result.push({ id: sec.id, label: sec.label, keys });
     }
-    // Add the synthetic Hits column as part of Statistics (or a
-    // fallback bucket if Statistics isn't declared).
-    if (availableKeys.has(HITS_COLUMN_KEY) && !classified.has(HITS_COLUMN_KEY)) {
-      const stats = result.find((s) => s.id === "statistics");
-      if (stats) {
-        stats.keys.unshift(HITS_COLUMN_KEY);
-      } else {
-        result.push({
-          id: "statistics",
-          label: "Statistics",
-          keys: [HITS_COLUMN_KEY],
-        });
+    // Stuff the synthetic Hits / Bytes pseudo-columns into Statistics
+    // (or a fresh bucket if Statistics isn't declared) so they show up
+    // near `_hitcount` / `_byte` in the picker.
+    const ensureStats = (): { id: string; label: string; keys: string[] } => {
+      let stats = result.find((s) => s.id === "statistics");
+      if (!stats) {
+        stats = { id: "statistics", label: "Statistics", keys: [] };
+        result.push(stats);
       }
-      classified.add(HITS_COLUMN_KEY);
+      return stats;
+    };
+    for (const synth of [BYTES_COLUMN_KEY, HITS_COLUMN_KEY]) {
+      if (availableKeys.has(synth) && !classified.has(synth)) {
+        ensureStats().keys.unshift(synth);
+        classified.add(synth);
+      }
     }
     const other: string[] = [];
     for (const k of availableKeys) {
