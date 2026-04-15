@@ -49,7 +49,8 @@ def _first_member(entry: Any, section: str) -> str:
 
 def parse(root: Any) -> dict[str, bytes]:
     buf = io.StringIO()
-    writer = csv.writer(buf)
+    # QUOTE_ALL — see custom_url_categories.py for the rationale.
+    writer = csv.writer(buf, quoting=csv.QUOTE_ALL)
     writer.writerow(HEADERS)
 
     for entry in root.findall(GROUPS_XPATH):

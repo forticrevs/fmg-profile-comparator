@@ -61,7 +61,8 @@ def _extract_text(parent: Any, tag: str) -> str:
 
 def parse(root: Any) -> dict[str, bytes]:
     buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=FIELDS)
+    # QUOTE_ALL — see custom_url_categories.py for the rationale.
+    writer = csv.DictWriter(buf, fieldnames=FIELDS, quoting=csv.QUOTE_ALL)
     writer.writeheader()
 
     for ent in root.findall(RULES_XPATH):

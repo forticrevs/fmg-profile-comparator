@@ -25,7 +25,14 @@ COLUMNS = ["entry name", "urls", "type", "description"]
 
 def parse(root: Any) -> dict[str, bytes]:
     buf = io.StringIO()
-    writer = csv.writer(buf)
+    # QUOTE_ALL wraps every field in double quotes. csv.writer's
+    # default (QUOTE_MINIMAL) only quotes fields that contain the
+    # delimiter / quote char / newline, so multi-word strings are
+    # emitted bare. Excel's "From Text/CSV" importer auto-detects
+    # delimiters and can pick whitespace alongside comma, which then
+    # splits every whitespace-separated token into its own column.
+    # Forcing every cell to be quoted removes that ambiguity.
+    writer = csv.writer(buf, quoting=csv.QUOTE_ALL)
     writer.writerow(COLUMNS)
 
     for entry in root.findall(CATS_XPATH):
