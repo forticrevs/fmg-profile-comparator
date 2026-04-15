@@ -1,13 +1,38 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { ComparisonField, togglePin } from "@/lib/api";
+import {
+  ComparisonField,
+  togglePin,
+  fetchProfileSchema,
+  SchemaResponse,
+} from "@/lib/api";
 import StructuredCollectionComparison from "@/components/StructuredCollectionComparison";
 import WebFilterCategoryTable from "@/components/WebFilterCategoryTable";
+import UrlFilterComparison from "@/components/UrlFilterComparison";
 import ActionBadge, { isActionKey } from "@/components/ActionBadge";
+import CommentCell from "@/components/CommentCell";
 import FieldVisibilityMenu, {
   loadHiddenFields,
 } from "@/components/FieldVisibilityMenu";
+
+// Free-form prose fields — rendered through <CommentCell /> with a
+// click-to-expand preview and (in baseline mode) a diff-aware offset.
+const COMMENT_LEAF_NAMES = new Set([
+  "comment",
+  "comments",
+  "description",
+  "desc",
+  "notes",
+]);
+
+function isCommentKey(fieldPath: string): boolean {
+  const lastDot = fieldPath.lastIndexOf(".");
+  const tail = lastDot === -1 ? fieldPath : fieldPath.slice(lastDot + 1);
+  const bracket = tail.indexOf("[");
+  const leaf = bracket === -1 ? tail : tail.slice(0, bracket);
+  return COMMENT_LEAF_NAMES.has(leaf.toLowerCase());
+}
 
 interface Props {
   profileType: string;
@@ -15,9 +40,13 @@ interface Props {
   fields: ComparisonField[];
   collectionKeys: string[];
   rawProfiles: Record<string, Record<string, unknown>>;
+  /** Profile selected as the drift baseline, or null for N-way mode. */
+  baseline: string | null;
+  /** Called when the user changes/clears the baseline from inside the
+   *  comparison view. The parent re-runs the comparison API call. */
+  onBaselineChange: (name: string | null) => void;
   pinnedFields: string[];
   onPinsChange: (pins: string[]) => void;
-  defaults?: Record<string, unknown>;
 }
 
 type FilterMode = "all" | "in_sync" | "differs" | "pinned";
@@ -230,10 +259,18 @@ export default function ComparisonTable({
   fields,
   collectionKeys,
   rawProfiles,
+  baseline,
+  onBaselineChange,
   pinnedFields,
   onPinsChange,
-  defaults,
 }: Props) {
+  // Force baseline to leftmost column position. The physical position
+  // reinforces its role; falls back to the API's order when no baseline
+  // is set.
+  const orderedNames = useMemo(() => {
+    if (!baseline || !profileNames.includes(baseline)) return profileNames;
+    return [baseline, ...profileNames.filter((n) => n !== baseline)];
+  }, [profileNames, baseline]);
   const [filter, setFilter] = useState<FilterMode>("all");
   const [search, setSearch] = useState("");
   const [pinLoading, setPinLoading] = useState<string | null>(null);
@@ -253,6 +290,43 @@ export default function ComparisonTable({
     for (const f of fields) seen.add(leafName(f.field_path));
     return [...seen];
   }, [fields]);
+
+  // Schema discovery: lazy-fetch the FMG syntax for this profile type so the
+  // visibility menu can present the *full* list of fields the schema knows
+  // about — not just the ones that happen to be in this response payload.
+  const [schema, setSchema] = useState<SchemaResponse | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetchProfileSchema(profileType)
+      .then((s) => { if (!cancelled) setSchema(s); })
+      .catch(() => { /* schema is optional polish; fall back to data-driven */ });
+    return () => { cancelled = true; };
+  }, [profileType]);
+
+  // Union schema fields with data-discovered leaves so every column the user
+  // could ever see is pickable from the menu.
+  const schemaFields = useMemo(() => {
+    if (!schema) return undefined;
+    const all = new Map<string, { name: string; label: string; help: string }>();
+    for (const f of schema.fields) {
+      all.set(f.name, { name: f.name, label: f.label, help: f.help });
+    }
+    for (const sub of Object.values(schema.subobjects)) {
+      for (const f of sub) {
+        if (!all.has(f.name)) {
+          all.set(f.name, { name: f.name, label: f.label, help: f.help });
+        }
+      }
+    }
+    return [...all.values()];
+  }, [schema]);
+
+  const mergedAvailable = useMemo(() => {
+    if (!schemaFields) return availableLeaves;
+    const seen = new Set<string>(availableLeaves);
+    for (const f of schemaFields) seen.add(f.name);
+    return [...seen];
+  }, [availableLeaves, schemaFields]);
 
   const pinnedSet = useMemo(() => new Set(pinnedFields), [pinnedFields]);
 
@@ -323,6 +397,19 @@ export default function ComparisonTable({
     const isDrift = isPinned && !field.in_sync;
     const shortPath = field.field_path.replace(/^[a-zA-Z_-]+\[\d+\]\./, "");
 
+    // Is this a free-form prose field? (comment / description / notes)
+    const fieldIsComment = isCommentKey(field.field_path);
+    // Baseline text for diff-aware CommentCell preview. Computed once
+    // per row so every cell shares the same anchor; null when there is
+    // no baseline set, or when the baseline profile's own value is
+    // missing (in which case we preview from char 0).
+    const commentBaselineText = (() => {
+      if (!baseline) return null;
+      const bv = field.values[baseline];
+      if (bv === "__MISSING__" || bv === null || bv === undefined) return null;
+      return formatValue(bv).text;
+    })();
+
     return (
       <tr
         key={field.field_path}
@@ -355,19 +442,63 @@ export default function ComparisonTable({
         >
           {shortPath}
         </td>
-        {profileNames.map((name) => {
+        {orderedNames.map((name) => {
           const fv = formatValue(field.values[name]);
           const isMissing = field.values[name] === "__MISSING__";
           const renderAsAction =
             !isMissing && isActionKey(field.field_path) && fv.text !== "null";
+          const renderAsComment = !isMissing && fieldIsComment;
+          const isBaselineCol = baseline === name;
+          // Per-cell drift marker. Only meaningful when a baseline is
+          // set; the backend populates differs_from_baseline for every
+          // selected profile in that case (baseline itself is False).
+          const driftMap = field.differs_from_baseline ?? {};
+          const cellDriftsFromBaseline =
+            baseline !== null && !isBaselineCol && driftMap[name] === true;
+          // Thin colored left-border for the cell — emerald on the
+          // baseline column, red on cells that drift from it. The
+          // border is part of the cell so it doesn't push columns.
+          const borderClass = isBaselineCol
+            ? "border-l-2 border-l-emerald-700/70"
+            : cellDriftsFromBaseline
+            ? "border-l-2 border-l-red-700/70"
+            : "border-l-2 border-l-transparent";
           return (
             <td
               key={name}
-              className="px-2 py-1 align-top overflow-hidden"
-              title={fv.tooltip}
+              className={`px-2 py-1 align-top ${
+                renderAsComment ? "" : "overflow-hidden"
+              } ${borderClass} ${isBaselineCol ? "bg-emerald-950/15" : ""}`}
+              title={renderAsComment ? undefined : fv.tooltip}
             >
               {renderAsAction ? (
                 <ActionBadge value={fv.text} />
+              ) : renderAsComment ? (
+                <div
+                  className={
+                    isBaselineCol
+                      ? "text-emerald-100"
+                      : cellDriftsFromBaseline
+                      ? "text-red-200"
+                      : field.in_sync
+                      ? "text-slate-400"
+                      : "text-slate-200"
+                  }
+                >
+                  <CommentCell
+                    text={fv.text}
+                    baselineText={
+                      isBaselineCol ? null : commentBaselineText
+                    }
+                    tone={
+                      isBaselineCol
+                        ? "baseline"
+                        : cellDriftsFromBaseline
+                        ? "drift"
+                        : "neutral"
+                    }
+                  />
+                </div>
               ) : (
                 <span
                   className={
@@ -375,6 +506,10 @@ export default function ComparisonTable({
                       ? "block whitespace-pre-wrap break-all text-slate-600 italic"
                       : fv.resolved
                       ? "block whitespace-pre-wrap break-all text-cyan-300"
+                      : isBaselineCol
+                      ? "block whitespace-pre-wrap break-all text-emerald-100"
+                      : cellDriftsFromBaseline
+                      ? "block whitespace-pre-wrap break-all text-red-200"
                       : field.in_sync
                       ? "block whitespace-pre-wrap break-all text-slate-400"
                       : "block whitespace-pre-wrap break-all text-slate-200"
@@ -449,7 +584,19 @@ export default function ComparisonTable({
        * at different array indices in different profiles. */}
       {profileType === "webfilter" && (
         <WebFilterCategoryTable
-          profileNames={profileNames}
+          profileNames={orderedNames}
+          rawProfiles={rawProfiles}
+          schema={schema}
+        />
+      )}
+
+      {/* Grouped URL filter list view — dedupes shared lists across
+       * profiles so a list referenced by N profiles renders once with
+       * a "Used by" chip strip rather than N identical collection
+       * comparisons. */}
+      {profileType === "webfilter" && (
+        <UrlFilterComparison
+          profileNames={orderedNames}
           rawProfiles={rawProfiles}
         />
       )}
@@ -458,9 +605,9 @@ export default function ComparisonTable({
         <StructuredCollectionComparison
           key={collectionKey}
           collectionKey={collectionKey}
-          profileNames={profileNames}
+          profileNames={orderedNames}
           rawProfiles={rawProfiles}
-          defaults={defaults}
+          schema={schema}
         />
       ))}
 
@@ -500,9 +647,11 @@ export default function ComparisonTable({
         ))}
         <FieldVisibilityMenu
           storageKey={visibilityKey}
-          available={availableLeaves}
+          available={mergedAvailable}
           hidden={hiddenFields}
           onChange={setHiddenFields}
+          schemaFields={schemaFields}
+          presentInData={availableLeaves}
         />
         <div className="ml-auto flex items-center gap-2">
           <button
@@ -534,7 +683,7 @@ export default function ComparisonTable({
           <colgroup>
             <col style={{ width: 36 }} />
             <col style={{ width: "18%" }} />
-            {profileNames.map((n) => (
+            {orderedNames.map((n) => (
               <col key={n} />
             ))}
             <col style={{ width: 52 }} />
@@ -547,15 +696,52 @@ export default function ComparisonTable({
               <th className="px-2 py-2 text-slate-600 font-medium text-[11px] text-left">
                 Field
               </th>
-              {profileNames.map((name) => (
-                <th
-                  key={name}
-                  className="px-2 py-2 text-slate-600 font-medium text-[11px] text-left font-mono break-words"
-                  title={name}
-                >
-                  {name}
-                </th>
-              ))}
+              {orderedNames.map((name) => {
+                const isBaselineCol = baseline === name;
+                return (
+                  <th
+                    key={name}
+                    className={`px-2 py-2 font-medium text-[11px] text-left font-mono break-words ${
+                      isBaselineCol
+                        ? "bg-emerald-950/30 text-emerald-200 border-l-2 border-l-emerald-700/70"
+                        : "text-slate-600 border-l-2 border-l-transparent"
+                    }`}
+                    title={name}
+                  >
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {isBaselineCol && (
+                        <span
+                          className="inline-flex items-center gap-1 px-1.5 py-px rounded bg-emerald-900/60 border border-emerald-700/60 text-[9px] font-bold tracking-wide text-emerald-200 uppercase"
+                          title="Baseline — all other profiles are diffed against this one"
+                        >
+                          ★ Baseline
+                        </span>
+                      )}
+                      <span className="truncate">{name}</span>
+                      {!isBaselineCol && (
+                        <button
+                          type="button"
+                          onClick={() => onBaselineChange(name)}
+                          className="text-[10px] text-slate-700 hover:text-emerald-400 transition"
+                          title="Set as baseline"
+                        >
+                          ☆
+                        </button>
+                      )}
+                      {isBaselineCol && (
+                        <button
+                          type="button"
+                          onClick={() => onBaselineChange(null)}
+                          className="text-[10px] text-emerald-500 hover:text-emerald-300 transition ml-auto"
+                          title="Clear baseline (return to N-way comparison)"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  </th>
+                );
+              })}
               <th className="px-2 py-2 text-slate-600 font-medium text-[11px] text-center">
                 Sync
               </th>

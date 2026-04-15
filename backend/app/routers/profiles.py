@@ -57,11 +57,16 @@ async def get_profile_types() -> list[dict[str, str]]:
 async def compare(
     profile_type: str,
     names: list[str] = Query(..., alias="name"),
+    baseline: str | None = Query(None),
     fmg_client: FMGClient = Depends(get_current_fmg),
 ) -> ComparisonResponse:
     _validate_type(profile_type)
     if len(names) < 2:
         raise HTTPException(400, "Need at least 2 profiles to compare")
+    if baseline is not None and baseline not in names:
+        raise HTTPException(
+            400, f"Baseline '{baseline}' must be one of the selected profiles"
+        )
 
     await _ensure_resolver(fmg_client)
 
@@ -72,19 +77,28 @@ async def compare(
         except Exception as exc:
             raise HTTPException(502, f"FMG error fetching '{n}': {exc}")
 
-    collection_keys = find_collection_keys(profiles)
+    # Webfilter profiles embed a shared URL filter list under `_url_filter`.
+    # Multiple profiles can reference the same list, so the frontend renders
+    # a dedicated grouped view (`UrlFilterComparison`) — we keep the block
+    # out of both the flat field comparison and SCC so it isn't shown twice
+    # or exploded into hundreds of redundant leaves.
+    collection_keys_all = find_collection_keys(profiles)
+    url_filter_roots = {"_url_filter"}
+    excluded_roots = list(set(collection_keys_all) | url_filter_roots)
+    collection_keys = [
+        k for k in collection_keys_all if not k.startswith("_url_filter")
+    ]
+
     fields = compare_profiles(
         profiles,
         resolver=resolver,
-        excluded_roots=collection_keys,
+        excluded_roots=excluded_roots,
+        baseline=baseline,
     )
     enriched_profiles = {
         name: resolver.enrich_object(profile)
         for name, profile in profiles.items()
     }
-
-    # Fetch default values for this profile type (for hide-defaults feature)
-    defaults = await fmg_client.get_profile_defaults(profile_type)
 
     return ComparisonResponse(
         profile_type=profile_type,
@@ -92,7 +106,7 @@ async def compare(
         fields=fields,
         collection_keys=collection_keys,
         raw_profiles=enriched_profiles,
-        defaults=defaults,
+        baseline=baseline,
     )
 
 

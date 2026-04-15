@@ -1038,7 +1038,12 @@ export default function PolicyViewerPage() {
   const containerClass = wideLayout
     ? "mx-auto max-w-none px-6 py-8 space-y-6"
     : "mx-auto max-w-[1600px] px-6 py-8 space-y-6";
-  const layoutGridClass = sidebarCollapsed
+  // Only honor persisted collapse when a package is actually selected.
+  // Without this, reloading the page after collapsing the sidebar leaves
+  // the user stranded on the "Select a package…" empty state with no way
+  // to re-open the picker (the expand button lives in the table toolbar).
+  const effectiveCollapsed = sidebarCollapsed && selectedPkg !== null;
+  const layoutGridClass = effectiveCollapsed
     ? "grid gap-4 lg:grid-cols-1"
     : "grid gap-6 lg:grid-cols-[260px_1fr]";
 
@@ -1083,7 +1088,7 @@ export default function PolicyViewerPage() {
         )}
 
         <div className={layoutGridClass}>
-          {!sidebarCollapsed && (
+          {!effectiveCollapsed && (
             <aside className="rounded-xl border border-slate-800 bg-slate-900/40">
               <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
                 <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-400">

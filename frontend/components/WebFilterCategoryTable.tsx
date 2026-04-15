@@ -21,10 +21,15 @@ import ActionBadge, { isActionKey } from "@/components/ActionBadge";
 import FieldVisibilityMenu, {
   loadHiddenFields,
 } from "@/components/FieldVisibilityMenu";
+import type { SchemaResponse } from "@/lib/api";
 
 interface Props {
   profileNames: string[];
   rawProfiles: Record<string, Record<string, unknown>>;
+  /** Optional FMG syntax schema for the current profile type. Used to
+   *  surface filter-entry fields that exist in the schema but happen
+   *  not to be populated in any of the currently compared profiles. */
+  schema?: SchemaResponse | null;
 }
 
 type FilterEntry = Record<string, unknown>;
@@ -204,105 +209,6 @@ function rowDiffCount(
 }
 
 /* ------------------------------------------------------------------ */
-/* Sub-row: expanded per-field comparison for one category             */
-/* ------------------------------------------------------------------ */
-
-function ExpandedFields({
-  row,
-  profileNames,
-  visibleKeys,
-}: {
-  row: CategoryRow;
-  profileNames: string[];
-  visibleKeys: string[];
-}) {
-  return (
-    <div className="border-t border-slate-800 bg-slate-950/40">
-      <table className="w-full text-sm table-fixed">
-        <colgroup>
-          <col style={{ width: "16%" }} />
-          {profileNames.map((n) => (
-            <col key={n} />
-          ))}
-        </colgroup>
-        <thead>
-          <tr className="bg-slate-950/80 border-b border-slate-800">
-            <th className="px-3 py-2 text-left text-[11px] font-medium text-slate-500 uppercase">
-              Field
-            </th>
-            {profileNames.map((name) => (
-              <th
-                key={name}
-                className="px-3 py-2 text-left text-[11px] font-medium text-slate-500 font-mono break-all"
-              >
-                {name}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {visibleKeys.map((field) => {
-            const vals = profileNames.map((n) => {
-              const f = row.byProfile[n];
-              return f ? normalizeForCompare(f[field]) : "__missing__";
-            });
-            const differs = new Set(vals).size > 1;
-            return (
-              <tr
-                key={field}
-                className={
-                  differs
-                    ? "bg-amber-950/20 border-t border-amber-900/30"
-                    : "border-t border-slate-800/40"
-                }
-              >
-                <td className="px-3 py-2 text-xs font-mono text-slate-400 break-all align-top">
-                  {field}
-                  {differs && (
-                    <span className="ml-1 text-amber-400 text-[10px]">≠</span>
-                  )}
-                </td>
-                {profileNames.map((name) => {
-                  const f = row.byProfile[name];
-                  if (!f) {
-                    return (
-                      <td
-                        key={name}
-                        className="px-3 py-2 align-top text-xs text-slate-600 italic"
-                      >
-                        —
-                      </td>
-                    );
-                  }
-                  const val = f[field];
-                  if (isActionKey(field)) {
-                    return (
-                      <td key={name} className="px-3 py-2 align-top">
-                        <ActionBadge value={formatScalar(val)} />
-                      </td>
-                    );
-                  }
-                  return (
-                    <td
-                      key={name}
-                      className={`px-3 py-2 align-top text-xs whitespace-pre-wrap break-all ${
-                        differs ? "text-slate-100 font-medium" : "text-slate-400"
-                      }`}
-                    >
-                      {formatScalar(val)}
-                    </td>
-                  );
-                })}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
 /* Main component                                                      */
 /* ------------------------------------------------------------------ */
 
@@ -311,6 +217,7 @@ type FilterMode = "all" | "differs" | "in_sync";
 export default function WebFilterCategoryTable({
   profileNames,
   rawProfiles,
+  schema,
 }: Props) {
   const [filter, setFilter] = useState<FilterMode>("all");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -322,9 +229,20 @@ export default function WebFilterCategoryTable({
     [profileNames, rawProfiles],
   );
 
+  // Schema-defined fields for the ftgd-wf.filters subobject. FMG exposes
+  // these under subobjects["filters"] — we merge them into availableFields
+  // so fields defined by the schema but absent from every currently
+  // compared profile still show up in the visibility menu.
+  const schemaFilterFields = useMemo(() => {
+    const subs = schema?.subobjects;
+    if (!subs) return undefined;
+    return subs["ftgd-wf.filters"] ?? subs["filters"];
+  }, [schema]);
+
   // Discover the union of filter-entry field names (excluding noise like
-  // category/id) across every profile — this drives the column visibility
-  // menu and the expanded per-field comparison.
+  // category/id) across every profile and merge with schema-defined
+  // fields so the expanded detail and column menu show the complete
+  // field universe.
   const availableFields = useMemo(() => {
     const seen = new Set<string>();
     for (const row of rows) {
@@ -333,6 +251,11 @@ export default function WebFilterCategoryTable({
         for (const k of Object.keys(f)) {
           if (!HIDDEN_FILTER_KEYS.has(k)) seen.add(k);
         }
+      }
+    }
+    if (schemaFilterFields) {
+      for (const f of schemaFilterFields) {
+        if (!HIDDEN_FILTER_KEYS.has(f.name)) seen.add(f.name);
       }
     }
     // Sort with action / log up front since they're the most-watched fields.
@@ -347,7 +270,7 @@ export default function WebFilterCategoryTable({
       }
       return a.localeCompare(b);
     });
-  }, [rows]);
+  }, [rows, schemaFilterFields]);
 
   const visibilityKey = "wfcat:columns";
   const [hiddenFields, setHiddenFields] = useState<Set<string>>(new Set());
@@ -545,20 +468,73 @@ export default function WebFilterCategoryTable({
                       )}
                     </td>
                   </tr>
-                  {isOpen && (
-                    <tr>
-                      <td
-                        colSpan={profileNames.length + 2}
-                        className="p-0"
-                      >
-                        <ExpandedFields
-                          row={row}
-                          profileNames={profileNames}
-                          visibleKeys={visibleFields}
-                        />
-                      </td>
-                    </tr>
-                  )}
+                  {isOpen &&
+                    visibleFields.map((field) => {
+                      const vals = profileNames.map((n) => {
+                        const f = row.byProfile[n];
+                        return f ? normalizeForCompare(f[field]) : "__missing__";
+                      });
+                      const differs = new Set(vals).size > 1;
+                      return (
+                        <tr
+                          key={`${row.key}::${field}`}
+                          className={
+                            differs
+                              ? "bg-amber-950/15 border-t border-amber-900/20"
+                              : "bg-slate-950/40 border-t border-slate-800/30"
+                          }
+                        >
+                          <td className="px-3 py-1.5 pl-10 text-[11px] font-mono text-slate-500 align-top break-all">
+                            {field}
+                            {differs && (
+                              <span className="ml-1 text-amber-400 text-[10px]">
+                                ≠
+                              </span>
+                            )}
+                          </td>
+                          {profileNames.map((name) => {
+                            const f = row.byProfile[name];
+                            if (!f) {
+                              return (
+                                <td
+                                  key={name}
+                                  className="px-3 py-1.5 align-top text-[11px] text-slate-700 italic"
+                                >
+                                  —
+                                </td>
+                              );
+                            }
+                            const val = f[field];
+                            if (isActionKey(field)) {
+                              return (
+                                <td key={name} className="px-3 py-1.5 align-top">
+                                  <ActionBadge value={formatScalar(val)} />
+                                </td>
+                              );
+                            }
+                            return (
+                              <td
+                                key={name}
+                                className={`px-3 py-1.5 align-top text-[11px] whitespace-pre-wrap break-all ${
+                                  differs
+                                    ? "text-slate-100 font-medium"
+                                    : "text-slate-400"
+                                }`}
+                              >
+                                {formatScalar(val)}
+                              </td>
+                            );
+                          })}
+                          <td className="px-2 py-1.5 text-center align-top">
+                            {differs && (
+                              <span className="text-amber-400 text-[10px]">
+                                ≠
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                 </Fragment>
               );
             })}

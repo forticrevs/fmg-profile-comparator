@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 
 from app.jobs.queue import redis_settings
-from app.jobs.tasks import ping, pan_extract
+from app.jobs.tasks import ping, pan_extract, policy_shadow
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ class WorkerSettings:
     functions = [
         ping.ping,
         pan_extract.pan_extract,
+        policy_shadow.policy_shadow,
     ]
 
     on_startup = startup

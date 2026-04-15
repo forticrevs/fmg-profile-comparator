@@ -5,6 +5,7 @@ import ActionBadge, { isActionKey } from "@/components/ActionBadge";
 import FieldVisibilityMenu, {
   loadHiddenFields,
 } from "@/components/FieldVisibilityMenu";
+import type { SchemaResponse } from "@/lib/api";
 
 /* ------------------------------------------------------------------ */
 /* Fade-in animation style (injected once)                             */
@@ -29,7 +30,7 @@ interface Props {
   collectionKey: string;
   profileNames: string[];
   rawProfiles: Record<string, Record<string, unknown>>;
-  defaults?: Record<string, unknown>;
+  schema?: SchemaResponse | null;
 }
 
 type CollectionEntry = Record<string, unknown>;
@@ -104,11 +105,9 @@ function extractListItems(value: unknown): string[] | null {
 function SmartValue({
   value,
   className,
-  showDefault,
 }: {
   value: unknown;
   className: string;
-  showDefault?: boolean;
 }) {
   useEffect(() => { ensureFadeStyle(); }, []);
 
@@ -118,13 +117,9 @@ function SmartValue({
   }, [value]);
 
   if (!listItems) {
-    // Render as plain text
     return (
       <span className={`${className} scc-fade-in`}>
         {formatValue(value)}
-        {showDefault && (
-          <span className="ml-1 text-[10px] text-slate-700">(default)</span>
-        )}
       </span>
     );
   }
@@ -149,9 +144,6 @@ function SmartValue({
       <span className="text-[10px] text-slate-600 mt-1 block">
         {listItems.length} items
       </span>
-      {showDefault && (
-        <span className="text-[10px] text-slate-700">(default)</span>
-      )}
     </div>
   );
 }
@@ -337,17 +329,6 @@ function matchEntries(
   });
 }
 
-function isDefaultValue(
-  key: string,
-  value: unknown,
-  defaults: Record<string, unknown> | undefined,
-): boolean {
-  if (!defaults) return false;
-  const defVal = defaults[key];
-  if (defVal === undefined) return false;
-  return normalizeForCompare(value) === normalizeForCompare(defVal);
-}
-
 // ---------------------------------------------------------------------------
 // NestedObjectTable — render an array-of-objects (e.g. SD-WAN sla list,
 // nested DLP entries) as a compact table inside a parent row's cell.
@@ -415,201 +396,309 @@ function NestedObjectTable({ rows }: { rows: Record<string, unknown>[] }) {
 }
 
 // ---------------------------------------------------------------------------
-// Row component
+// Dense entry row — single-line grid row with preview cells + expand-in-place
+// detail. Replaces the fat collapsible card layout; preserves expand-to-full
+// per-profile matrix behavior.
 // ---------------------------------------------------------------------------
 
-function MatchedEntryRow({
+const PREVIEW_COLUMN_LIMIT = 3;
+
+/* Fixed-width track for the entry label / field-name column. Both the
+ * summary row and the expanded detail grid use this *same* literal so
+ * the field column starts and ends at exactly the same x-coordinate in
+ * both grids, even when the preview-column count and profile-count
+ * differ (e.g. 2-profile comparisons with 3 preview columns). Using an
+ * fr unit here would make the label width depend on how many fr
+ * neighbours share the row, so 2-profile details drifted ~85px from
+ * 3-preview summaries. A percentage track is container-relative and
+ * keeps the two grids pinned regardless of neighbour count. */
+const LABEL_COL_TRACK = "minmax(9rem, 28%)";
+
+function buildGridTemplate(previewCount: number): string {
+  // chevron | label | preview columns... | status pill
+  return `14px ${LABEL_COL_TRACK} ${"minmax(0, 1fr) ".repeat(previewCount)}5.5rem`;
+}
+
+function buildDetailTemplate(profileCount: number): string {
+  // Same skeleton as buildGridTemplate but with per-profile columns
+  // filling the middle region; the left/right fixed tracks and the
+  // label column are kept identical so rows line up cell-for-cell.
+  return `14px ${LABEL_COL_TRACK} ${"minmax(0, 1fr) ".repeat(profileCount)}5.5rem`;
+}
+
+interface FieldDiffInfo {
+  differs: boolean;
+  /** First non-null value across profiles; used as the preview value when all
+   *  profiles agree (and ignored when they differ). */
+  firstValue: unknown;
+}
+
+function computeFieldDiffs(
+  entries: (CollectionEntry | null)[],
+  keys: string[],
+): Record<string, FieldDiffInfo> {
+  const result: Record<string, FieldDiffInfo> = {};
+  for (const key of keys) {
+    const vals = entries.map((e) => (e ? normalizeForCompare(e[key]) : ""));
+    const nonMissing = vals.filter((v) => v !== "");
+    const differs =
+      new Set(nonMissing).size > 1 ||
+      (vals.some((v) => v === "") && nonMissing.length > 0);
+    const firstIdx = entries.findIndex((e) => e !== null);
+    result[key] = {
+      differs,
+      firstValue: firstIdx >= 0 ? entries[firstIdx]?.[key] : undefined,
+    };
+  }
+  return result;
+}
+
+function PreviewCell({
+  diff,
+  columnKey,
+}: {
+  diff: FieldDiffInfo | undefined;
+  columnKey: string;
+}) {
+  if (!diff || diff.firstValue === undefined) {
+    return <span className="text-slate-700 text-[11px]">—</span>;
+  }
+  if (diff.differs) {
+    return (
+      <span
+        className="inline-flex items-center rounded border border-amber-900/60 bg-amber-950/40 px-1.5 py-px text-[10px] text-amber-300 font-semibold"
+        title="Values differ across profiles — click row to expand"
+      >
+        ≠
+      </span>
+    );
+  }
+  const display = formatValue(diff.firstValue);
+  if (display === "—") {
+    return <span className="text-slate-700 text-[11px]">—</span>;
+  }
+  if (isActionKey(columnKey)) {
+    return <ActionBadge value={display} />;
+  }
+  return (
+    <span
+      className="block text-[11px] text-slate-400 truncate"
+      title={display}
+    >
+      {display}
+    </span>
+  );
+}
+
+function StatusPill({
+  diffCount,
+  missingCount,
+}: {
+  diffCount: number;
+  missingCount: number;
+}) {
+  if (diffCount === 0 && missingCount === 0) {
+    return (
+      <div className="flex justify-end">
+        <span className="inline-flex items-center rounded-full border border-emerald-900/60 bg-emerald-950/40 px-1.5 py-px text-[10px] text-emerald-300">
+          ✓
+        </span>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center justify-end gap-1">
+      {missingCount > 0 && (
+        <span className="rounded-full border border-red-900/60 bg-red-950/40 px-1.5 py-px text-[10px] text-red-300 tabular-nums">
+          {missingCount}⌀
+        </span>
+      )}
+      {diffCount > 0 && (
+        <span className="rounded-full border border-amber-900/60 bg-amber-950/40 px-1.5 py-px text-[10px] text-amber-300 font-semibold tabular-nums">
+          {diffCount}≠
+        </span>
+      )}
+    </div>
+  );
+}
+
+function DenseEntryRow({
   row,
   profileNames,
-  hideDefaults,
   hiddenColumns,
-  defaults,
-  forceExpanded,
+  previewColumns,
+  availableColumns,
+  expanded,
+  onToggle,
+  isLast,
 }: {
   row: MatchedRow;
   profileNames: string[];
   hiddenColumns: Set<string>;
-  hideDefaults: boolean;
-  defaults?: Record<string, unknown>;
-  forceExpanded?: boolean;
+  previewColumns: string[];
+  /** Full field universe for this collection (schema ∪ data across all
+   *  rows). When the user expands a row we show every one of these, not
+   *  just the keys that happen to be populated in this specific row —
+   *  otherwise fields that exist on other rows (or that FMG's schema
+   *  defines but this profile leaves unset) silently disappear. */
+  availableColumns: string[];
+  expanded: boolean;
+  onToggle: () => void;
+  isLast: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
-
-  useEffect(() => {
-    if (forceExpanded !== undefined) setExpanded(forceExpanded);
-  }, [forceExpanded]);
-
+  // Full sorted field list for this collection, independent of which
+  // fields this particular row happens to populate. Noise keys (oid,
+  // obj seq, last-modified) are stripped; the FieldVisibilityMenu can
+  // hide anything else the user doesn't want to see.
   const allKeys = useMemo(() => {
-    const keys = new Set<string>();
-    for (const entry of row.entries) {
-      if (entry) Object.keys(entry).filter((k) => !HIDDEN_ENTRY_KEYS.has(k)).forEach((k) => keys.add(k));
-    }
-    return sortEntryKeys([...keys]);
-  }, [row.entries]);
+    return sortEntryKeys(
+      availableColumns.filter((k) => !HIDDEN_ENTRY_KEYS.has(k)),
+    );
+  }, [availableColumns]);
 
-  const fieldDiffs = useMemo(() => {
-    const result: Record<string, { differs: boolean }> = {};
-    for (const key of allKeys) {
-      const vals = row.entries.map((e) => (e ? normalizeForCompare(e[key]) : ""));
-      const nonMissing = vals.filter((v) => v !== "");
-      const differs =
-        new Set(nonMissing).size > 1 ||
-        (vals.some((v) => v === "") && nonMissing.length > 0);
-      result[key] = { differs };
-    }
-    return result;
-  }, [allKeys, row.entries]);
+  const fieldDiffs = useMemo(
+    () => computeFieldDiffs(row.entries, allKeys),
+    [row.entries, allKeys],
+  );
 
-  const diffCount = Object.values(fieldDiffs).filter((d) => d.differs).length;
-  const allPresent = row.entries.every((e) => e !== null);
+  const diffCount = Object.values(fieldDiffs).filter(
+    (d) => d.differs,
+  ).length;
   const missingCount = row.entries.filter((e) => e === null).length;
 
   const visibleKeys = useMemo(() => {
-    let keys = allKeys;
-    if (hiddenColumns.size > 0) {
-      keys = keys.filter((k) => !hiddenColumns.has(k));
-    }
-    if (hideDefaults) {
-      keys = keys.filter((key) =>
-        row.entries.some((entry) => {
-          if (!entry) return true;
-          return !isDefaultValue(key, entry[key], defaults);
-        }),
-      );
-    }
-    return keys;
-  }, [allKeys, hideDefaults, hiddenColumns, defaults, row.entries]);
+    if (hiddenColumns.size === 0) return allKeys;
+    return allKeys.filter((k) => !hiddenColumns.has(k));
+  }, [allKeys, hiddenColumns]);
+
+  const borderClass = isLast ? "" : "border-b border-slate-800/50";
+  const hoverClass = "hover:bg-slate-800/30";
+  const driftClass = diffCount > 0 ? "bg-amber-950/10" : "";
 
   return (
-    <div
-      className={`rounded-xl border overflow-hidden ${
-        diffCount > 0
-          ? "border-amber-900/50 bg-slate-900/60"
-          : "border-slate-800 bg-slate-900/40"
-      }`}
-    >
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-slate-800/40 transition"
+    <>
+      {/* Summary row */}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onToggle}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onToggle();
+          }
+        }}
+        className={`scc-entry-row grid items-center gap-2 px-3 py-1.5 cursor-pointer transition ${borderClass} ${hoverClass} ${driftClass}`}
       >
-        <span className="text-slate-600 text-[10px] w-3">
+        <span className="text-slate-600 text-[9px] leading-none select-none">
           {expanded ? "▼" : "▶"}
         </span>
-        <span className="text-sm font-semibold text-slate-100 min-w-0 truncate">
+        <span
+          className="text-[12px] font-medium text-slate-200 min-w-0 truncate"
+          title={row.label}
+        >
           {row.label}
         </span>
-        <div className="ml-auto flex items-center gap-2">
-          {!allPresent && (
-            <span className="rounded-full border border-red-900/60 bg-red-950/40 px-2 py-0.5 text-[10px] text-red-300">
-              {missingCount} missing
-            </span>
-          )}
-          {diffCount > 0 ? (
-            <span className="rounded-full border border-amber-900/60 bg-amber-950/40 px-2 py-0.5 text-[10px] text-amber-300 font-semibold">
-              {diffCount} differ{diffCount !== 1 ? "s" : ""}
-            </span>
-          ) : (
-            <span className="rounded-full border border-emerald-900/60 bg-emerald-950/40 px-2 py-0.5 text-[10px] text-emerald-300">
-              ✓ In sync
-            </span>
-          )}
-        </div>
-      </button>
+        {previewColumns.map((col) => (
+          <div key={col} className="min-w-0">
+            <PreviewCell diff={fieldDiffs[col]} columnKey={col} />
+          </div>
+        ))}
+        <StatusPill diffCount={diffCount} missingCount={missingCount} />
+      </div>
 
+      {/* Expanded detail — per-field grid rows whose chevron gutter,
+          field column, and status gutter align exactly with the parent
+          summary row's three fixed tracks. The label track width is a
+          fixed percentage of the container (shared with buildGridTemplate
+          via LABEL_COL_TRACK), so rows line up regardless of how many
+          preview-columns vs. profile-columns share the middle fr pool. */}
       {expanded && (
-        <div className="border-t border-slate-800">
-          <table className="w-full text-sm table-fixed">
-            <colgroup>
-              <col style={{ width: "15%" }} />
-              {profileNames.map((n) => (
-                <col key={n} />
-              ))}
-            </colgroup>
-            <thead>
-              <tr className="bg-slate-950/80 border-b border-slate-800">
-                <th className="px-3 py-2 text-left text-[11px] font-medium text-slate-500 uppercase">
-                  Field
-                </th>
-                {profileNames.map((name) => (
-                  <th
-                    key={name}
-                    className="px-3 py-2 text-left text-[11px] font-medium text-slate-500 font-mono break-all"
-                  >
-                    {name}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {visibleKeys.map((key) => {
-                const diff = fieldDiffs[key];
-                return (
-                  <tr
-                    key={key}
-                    className={
-                      diff.differs
-                        ? "bg-amber-950/20 border-t border-amber-900/30"
-                        : "border-t border-slate-800/40"
-                    }
-                  >
-                    <td className="px-3 py-2 text-xs font-mono text-slate-400 break-all align-top">
-                      {key}
-                      {diff.differs && (
-                        <span className="ml-1 text-amber-400 text-[10px]">≠</span>
+        <div
+          className={`scc-entry-detail bg-slate-950/60 ${isLast ? "" : "border-b border-slate-800/50"}`}
+          style={{
+            ["--scc-detail-cols" as string]: buildDetailTemplate(
+              profileNames.length,
+            ),
+          }}
+        >
+          {/* Field-level header — profile names in each profile column */}
+          <div
+            className="grid items-center gap-2 px-3 py-1.5 border-b border-slate-800/60 text-[10px] font-semibold uppercase tracking-wide text-slate-600"
+            style={{ gridTemplateColumns: "var(--scc-detail-cols)" }}
+          >
+            <span />
+            <span>Field</span>
+            {profileNames.map((name) => (
+              <span
+                key={name}
+                className="font-mono text-slate-600 truncate normal-case min-w-0"
+                title={name}
+              >
+                {name}
+              </span>
+            ))}
+            <span />
+          </div>
+
+          {visibleKeys.map((key) => {
+            const diff = fieldDiffs[key];
+            return (
+              <div
+                key={key}
+                className={`grid items-start gap-2 px-3 py-1.5 border-t ${
+                  diff.differs
+                    ? "bg-amber-950/15 border-amber-900/20"
+                    : "border-slate-800/30"
+                }`}
+                style={{ gridTemplateColumns: "var(--scc-detail-cols)" }}
+              >
+                <span />
+                <div className="text-[11px] font-mono text-slate-500 break-all min-w-0">
+                  {key}
+                  {diff.differs && (
+                    <span className="ml-1 text-amber-400 text-[10px]">≠</span>
+                  )}
+                </div>
+                {row.entries.map((entry, i) => {
+                  const val = entry ? entry[key] : undefined;
+                  const isMissing = !entry;
+                  const isAction = isActionKey(key);
+                  return (
+                    <div key={profileNames[i]} className="min-w-0">
+                      {isMissing ? (
+                        <span className="block text-[11px] text-slate-700 italic">
+                          —
+                        </span>
+                      ) : isAction ? (
+                        <ActionBadge value={formatValue(val)} />
+                      ) : isObjectArray(val) ? (
+                        <NestedObjectTable rows={val} />
+                      ) : (
+                        <SmartValue
+                          value={val}
+                          className={`block whitespace-pre-wrap break-all text-[11px] ${
+                            diff.differs
+                              ? "text-slate-100 font-medium"
+                              : "text-slate-400"
+                          }`}
+                        />
                       )}
-                    </td>
-                    {row.entries.map((entry, i) => {
-                      const val = entry ? entry[key] : undefined;
-                      const isMissing = !entry;
-                      const isFieldDefault =
-                        !!entry && isDefaultValue(key, val, defaults);
-                      const isAction = isActionKey(key);
-                      return (
-                        <td key={profileNames[i]} className="px-3 py-2 align-top">
-                          {isMissing ? (
-                            <span className="block text-xs text-slate-600 italic scc-fade-in">
-                              —
-                            </span>
-                          ) : isAction ? (
-                            <ActionBadge value={formatValue(val)} />
-                          ) : isObjectArray(val) ? (
-                            <NestedObjectTable rows={val} />
-                          ) : (
-                            <SmartValue
-                              value={val}
-                              showDefault={isFieldDefault}
-                              className={`block whitespace-pre-wrap break-all text-xs ${
-                                diff.differs
-                                  ? "text-slate-100 font-medium"
-                                  : isFieldDefault
-                                  ? "text-slate-600"
-                                  : "text-slate-400"
-                              }`}
-                            />
-                          )}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                );
-              })}
-              {visibleKeys.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={profileNames.length + 1}
-                    className="px-4 py-6 text-center text-slate-600 text-sm"
-                  >
-                    {hideDefaults
-                      ? "All fields are at default values."
-                      : "No fields found."}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                    </div>
+                  );
+                })}
+                <span />
+              </div>
+            );
+          })}
+          {visibleKeys.length === 0 && (
+            <div className="px-4 py-4 text-center text-slate-600 text-xs">
+              No fields visible.
+            </div>
+          )}
         </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -636,10 +725,9 @@ export default function StructuredCollectionComparison({
   collectionKey,
   profileNames,
   rawProfiles,
-  defaults,
+  schema,
 }: Props) {
   const [filter, setFilter] = useState<FilterMode>("all");
-  const [hideDefaults, setHideDefaults] = useState(false);
   const [expandState, setExpandState] = useState<boolean | undefined>(undefined);
   const [matchByUrl, setMatchByUrl] = useState(true);
 
@@ -658,32 +746,27 @@ export default function StructuredCollectionComparison({
     [profileNames, rawProfiles, collectionKey],
   );
 
-  // Extract entry-level defaults from the full profile defaults object
-  const entryDefaults = useMemo(() => {
-    if (!defaults) return undefined;
-    // Support dot-path collection keys for defaults too
-    let obj: unknown = defaults;
-    for (const part of collectionKey.split(".")) {
-      if (obj && typeof obj === "object" && !Array.isArray(obj)) {
-        obj = (obj as Record<string, unknown>)[part];
-      } else {
-        return undefined;
-      }
-    }
-    if (Array.isArray(obj) && obj.length > 0 && typeof obj[0] === "object") {
-      return obj[0] as Record<string, unknown>;
-    }
-    return undefined;
-  }, [defaults, collectionKey]);
+  // Walk the schema's subobjects tree to find the field list for this
+  // collection. FMG syntax exposes nested tables under `subobj.<name>`, e.g.
+  // webfilter `ftgd-wf.filters` lives at `subobj.ftgd-wf.subobj.filters`.
+  // We try the last dotted segment as the subobj name (good enough for the
+  // collections we care about) and fall back to data-driven discovery.
+  const schemaSubFields = useMemo(() => {
+    if (!schema?.subobjects) return undefined;
+    const parts = collectionKey.split(".");
+    const last = parts[parts.length - 1];
+    const hit = schema.subobjects[last] ?? schema.subobjects[collectionKey];
+    return hit;
+  }, [schema, collectionKey]);
 
   const matchedRows = useMemo(
     () => matchEntries(profileNames, rawProfiles, collectionKey, matchByUrl),
     [profileNames, rawProfiles, collectionKey, matchByUrl],
   );
 
-  // Discover every entry-key across every matched entry — this is the
-  // schema we offer to the user in the field-visibility menu.
-  const availableColumns = useMemo(() => {
+  // Discover every entry-key across every matched entry in the current
+  // data. This is our fallback (and always present) source of columns.
+  const dataColumns = useMemo(() => {
     const seen = new Set<string>();
     for (const row of matchedRows) {
       for (const entry of row.entries) {
@@ -695,6 +778,16 @@ export default function StructuredCollectionComparison({
     }
     return [...seen];
   }, [matchedRows]);
+
+  // Merge schema-defined columns with data-observed ones so the user can
+  // toggle columns that aren't present on the current profile but exist in
+  // the FMG schema (they'll flip back on when another profile populates them).
+  const availableColumns = useMemo(() => {
+    if (!schemaSubFields) return dataColumns;
+    const seen = new Set<string>(dataColumns);
+    for (const f of schemaSubFields) seen.add(f.name);
+    return [...seen];
+  }, [dataColumns, schemaSubFields]);
 
   const rowsWithCounts = useMemo(() => {
     return matchedRows.map((row) => {
@@ -774,18 +867,6 @@ export default function StructuredCollectionComparison({
           </button>
         ))}
 
-        <div className="h-4 w-px bg-slate-800 mx-1" />
-
-        <label className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={hideDefaults}
-            onChange={(e) => setHideDefaults(e.target.checked)}
-            className="rounded border-slate-700 bg-slate-900 text-cyan-600 focus:ring-cyan-600 focus:ring-offset-0 h-3.5 w-3.5"
-          />
-          Hide defaults
-        </label>
-
         {hasUrlEntries && (
           <>
             <div className="h-4 w-px bg-slate-800 mx-1" />
@@ -808,6 +889,8 @@ export default function StructuredCollectionComparison({
           onChange={setHiddenColumns}
           labelOf={(f) => humanizeKey(f)}
           buttonLabel="Columns"
+          schemaFields={schemaSubFields}
+          presentInData={dataColumns}
         />
 
         <div className="ml-auto flex items-center gap-2">
@@ -827,24 +910,103 @@ export default function StructuredCollectionComparison({
         </div>
       </div>
 
-      <div className="space-y-2">
-        {filteredRows.map(({ row }) => (
-          <MatchedEntryRow
-            key={row.matchKey}
-            row={row}
-            profileNames={profileNames}
-            hideDefaults={hideDefaults}
-            hiddenColumns={hiddenColumns}
-            defaults={entryDefaults}
-            forceExpanded={expandState}
-          />
-        ))}
-        {filteredRows.length === 0 && (
-          <div className="rounded-xl border border-dashed border-slate-800 bg-slate-950/50 px-4 py-6 text-center text-sm text-slate-500">
-            No entries match the current filter.
-          </div>
-        )}
-      </div>
+      <DenseEntryList
+        filteredRows={filteredRows}
+        profileNames={profileNames}
+        hiddenColumns={hiddenColumns}
+        availableColumns={availableColumns}
+        forceExpanded={expandState}
+      />
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DenseEntryList — wraps all matched rows in a shared grid container so the
+// preview columns align across rows without a per-row <table>.
+// ---------------------------------------------------------------------------
+
+function DenseEntryList({
+  filteredRows,
+  profileNames,
+  hiddenColumns,
+  availableColumns,
+  forceExpanded,
+}: {
+  filteredRows: { row: MatchedRow; diffCount: number }[];
+  profileNames: string[];
+  hiddenColumns: Set<string>;
+  availableColumns: string[];
+  forceExpanded: boolean | undefined;
+}) {
+  // Preview columns — priority-sorted, visible-only, capped at 3. These are
+  // the fields that get shown inline on the collapsed row; everything else
+  // lives in the expand-in-place detail.
+  const previewColumns = useMemo(() => {
+    const visible = availableColumns.filter((k) => !hiddenColumns.has(k));
+    return sortEntryKeys(visible).slice(0, PREVIEW_COLUMN_LIMIT);
+  }, [availableColumns, hiddenColumns]);
+
+  const gridTemplate = buildGridTemplate(previewColumns.length);
+
+  // Per-row expand state, keyed by matchKey. Expand All / Collapse All hooks
+  // into this via the forceExpanded prop.
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (forceExpanded === true) {
+      setExpandedKeys(new Set(filteredRows.map((r) => r.row.matchKey)));
+    } else if (forceExpanded === false) {
+      setExpandedKeys(new Set());
+    }
+  }, [forceExpanded, filteredRows]);
+
+  const toggle = (key: string) => {
+    setExpandedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  if (filteredRows.length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed border-slate-800 bg-slate-950/50 px-4 py-6 text-center text-sm text-slate-500">
+        No entries match the current filter.
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="scc-entry-grid rounded-xl border border-slate-800 bg-slate-900/40 overflow-hidden"
+      style={{ ["--scc-grid-cols" as string]: gridTemplate }}
+    >
+      {/* Header row */}
+      <div className="scc-entry-header grid items-center gap-2 px-3 py-1.5 bg-slate-950/70 border-b border-slate-800 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+        <span />
+        <span>Entry</span>
+        {previewColumns.map((col) => (
+          <span key={col} className="truncate" title={humanizeKey(col)}>
+            {humanizeKey(col)}
+          </span>
+        ))}
+        <span className="text-right">Δ</span>
+      </div>
+
+      {filteredRows.map(({ row }, i) => (
+        <DenseEntryRow
+          key={row.matchKey}
+          row={row}
+          profileNames={profileNames}
+          hiddenColumns={hiddenColumns}
+          previewColumns={previewColumns}
+          availableColumns={availableColumns}
+          expanded={expandedKeys.has(row.matchKey)}
+          onToggle={() => toggle(row.matchKey)}
+          isLast={i === filteredRows.length - 1}
+        />
+      ))}
+    </div>
   );
 }

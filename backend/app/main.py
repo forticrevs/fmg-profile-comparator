@@ -14,6 +14,9 @@ from app.routers import (
     tools_pan,
     tools_diff,
     tools_policy_viewer,
+    tools_policy_shadow,
+    tools_isdb,
+    schemas,
 )
 
 
@@ -46,6 +49,9 @@ app.include_router(jobs.router)
 app.include_router(tools_pan.router)
 app.include_router(tools_diff.router)
 app.include_router(tools_policy_viewer.router)
+app.include_router(tools_policy_shadow.router)
+app.include_router(tools_isdb.router)
+app.include_router(schemas.router)
 
 
 @app.get("/api/health")

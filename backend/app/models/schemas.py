@@ -23,6 +23,10 @@ class ComparisonField(BaseModel):
     label: str
     values: dict[str, Any]  # profile_name -> value
     in_sync: bool
+    # Per-profile drift map. Only populated when a baseline is set on the
+    # comparison; baseline profile is always False, others are True iff
+    # their normalized value differs from the baseline's normalized value.
+    differs_from_baseline: dict[str, bool] = Field(default_factory=dict)
 
 
 class ComparisonResponse(BaseModel):
@@ -32,7 +36,9 @@ class ComparisonResponse(BaseModel):
     fields: list[ComparisonField]
     collection_keys: list[str] = Field(default_factory=list)
     raw_profiles: dict[str, dict[str, Any]] = Field(default_factory=dict)
-    defaults: dict[str, Any] = Field(default_factory=dict)
+    # Echoed back so the frontend knows which profile was treated as the
+    # baseline (or null when comparison was N-way symmetric).
+    baseline: str | None = None
 
 
 class PinToggleRequest(BaseModel):

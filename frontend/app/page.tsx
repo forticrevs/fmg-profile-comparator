@@ -17,6 +17,27 @@ import {
 
 type View = "dashboard" | "picker" | "comparison";
 
+const BASELINE_KEY = (type: string) => `baseline:${type}`;
+
+function loadBaseline(type: string): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(BASELINE_KEY(type));
+  } catch {
+    return null;
+  }
+}
+
+function saveBaseline(type: string, name: string | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (name) window.localStorage.setItem(BASELINE_KEY(type), name);
+    else window.localStorage.removeItem(BASELINE_KEY(type));
+  } catch {
+    /* ignore quota / private mode failures */
+  }
+}
+
 export default function Home() {
   const { username, activeInstance, needsSetup, logout: doLogout } = useAuth();
   const router = useRouter();
@@ -25,6 +46,7 @@ export default function Home() {
   const [selectedType, setSelectedType] = useState<ProfileType | null>(null);
   const [profiles, setProfiles] = useState<string[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [baseline, setBaselineState] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -35,9 +57,27 @@ export default function Home() {
     fields: ComparisonField[];
     collectionKeys: string[];
     rawProfiles: Record<string, Record<string, unknown>>;
-    defaults: Record<string, unknown>;
+    baseline: string | null;
   } | null>(null);
   const [pins, setPins] = useState<string[]>([]);
+
+  // Persisted baseline setter — writes through to localStorage scoped by
+  // profile type. The user-facing requirement is "remember my baseline
+  // across sessions, but let me change it" — single key per type matches
+  // the typical "I always compare against THE_GOLDEN" workflow.
+  const setBaseline = (name: string | null) => {
+    setBaselineState(name);
+    if (selectedType) saveBaseline(selectedType.id, name);
+  };
+
+  // If the user deselects the profile that's currently the baseline,
+  // clear the baseline so we don't ship a stale name to the comparator.
+  useEffect(() => {
+    if (baseline && !selected.has(baseline)) {
+      setBaselineState(null);
+      if (selectedType) saveBaseline(selectedType.id, null);
+    }
+  }, [selected, baseline, selectedType]);
 
   useEffect(() => {
     fetchProfileTypes().then(setTypes).catch(console.error);
@@ -46,6 +86,10 @@ export default function Home() {
   const handleSelectType = async (type: ProfileType) => {
     setSelectedType(type);
     setSelected(new Set());
+    // Restore the user's persisted baseline for this profile type. It
+    // gets cleared automatically by the effect above if it isn't in the
+    // current selection.
+    setBaselineState(loadBaseline(type.id));
     setView("picker");
     setLoading(true);
     try {
@@ -58,15 +102,23 @@ export default function Home() {
     }
   };
 
-  const handleCompare = async () => {
-    if (!selectedType || selected.size < 2) return;
+  // Re-runs the comparison API call. Used both by the initial Compare
+  // button and by the in-comparison "change baseline" affordance, so the
+  // server-side drift map always reflects the current baseline choice.
+  const runComparison = async (
+    type: ProfileType,
+    names: string[],
+    baselineName: string | null,
+    refetchPins: boolean,
+  ) => {
     setLoading(true);
     setError(null);
-    setView("comparison");
     try {
+      const comparisonPromise = compareProfiles(type.id, names, baselineName);
+      const pinsPromise = refetchPins ? fetchPins(type.id) : Promise.resolve(null);
       const [comparison, currentPins] = await Promise.all([
-        compareProfiles(selectedType.id, Array.from(selected)),
-        fetchPins(selectedType.id),
+        comparisonPromise,
+        pinsPromise,
       ]);
       setResult({
         profileType: comparison.profile_type,
@@ -74,15 +126,30 @@ export default function Home() {
         fields: comparison.fields,
         collectionKeys: comparison.collection_keys,
         rawProfiles: comparison.raw_profiles,
-        defaults: comparison.defaults ?? {},
+        baseline: comparison.baseline ?? null,
       });
-      setPins(currentPins);
+      if (currentPins) setPins(currentPins);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Comparison failed");
       setView("picker");
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleCompare = async () => {
+    if (!selectedType || selected.size < 2) return;
+    setView("comparison");
+    await runComparison(selectedType, Array.from(selected), baseline, true);
+  };
+
+  // Called from inside ComparisonTable when the user picks a different
+  // baseline mid-view. We persist + re-run the diff against the new
+  // anchor so the per-cell drift markers stay accurate.
+  const handleBaselineChangeInComparison = async (name: string | null) => {
+    setBaseline(name);
+    if (!selectedType || !result) return;
+    await runComparison(selectedType, result.profileNames, name, false);
   };
 
   const handleBack = () => {
@@ -93,6 +160,7 @@ export default function Home() {
       setView("dashboard");
       setSelectedType(null);
       setSelected(new Set());
+      setBaselineState(null);
     }
   };
 
@@ -195,6 +263,12 @@ export default function Home() {
               >
                 DLP Data Types
               </button>
+              <button
+                onClick={() => router.push("/reference/internet-services")}
+                className="text-slate-500 hover:text-cyan-400 transition"
+              >
+                Internet Services
+              </button>
             </nav>
             <div className="h-4 w-px bg-slate-800" />
             {activeInstance && (
@@ -277,6 +351,7 @@ export default function Home() {
             profileType={selectedType}
             profiles={profiles}
             selected={selected}
+            baseline={baseline}
             loading={loading}
             onToggle={(name) => {
               setSelected((prev) => {
@@ -293,6 +368,7 @@ export default function Home() {
                   : new Set(profiles)
               )
             }
+            onBaselineChange={setBaseline}
             onCompare={handleCompare}
             onBack={handleBack}
           />
@@ -316,9 +392,10 @@ export default function Home() {
             fields={result.fields}
             collectionKeys={result.collectionKeys}
             rawProfiles={result.rawProfiles}
+            baseline={result.baseline}
+            onBaselineChange={handleBaselineChangeInComparison}
             pinnedFields={pins}
             onPinsChange={setPins}
-            defaults={result.defaults}
           />
         )}
       </div>

@@ -1,14 +1,29 @@
-"""FortiManager JSON-RPC API client."""
+"""FortiManager JSON-RPC API client.
+
+Also hosts a thin wrapper over the undocumented FMG GUI ``cgi-bin``
+module API — specifically the FortiGuard encyclopedia lookup used by the
+signature-hover tooltip. The alternative API has a completely separate
+session lifecycle (cookie-based, with an ``XSRF-TOKEN`` header) so we
+cache its state alongside the JSON-RPC session token on the same
+``FMGClient`` instance rather than building a second client class.
+"""
 
 from __future__ import annotations
 
 import httpx
 import logging
+import time
 from typing import Any
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Encyclopedia cache TTL. Signature metadata is fully static per
+# FortiGuard release — nothing here needs live freshness. 24 h keeps
+# hover tooltips instant without dominating process memory (each entry
+# is a few KB).
+_ENCY_TTL_SECONDS = 24 * 60 * 60
 
 
 class FMGClient:
@@ -22,6 +37,25 @@ class FMGClient:
         self._http = httpx.AsyncClient(verify=self._verify, timeout=30.0)
         self._req_id = 1
         self._adom = settings.fmg_adom
+
+        # Credentials stashed on successful login so the alt-API session
+        # (which has its own expiry independent of the JSON-RPC one) can
+        # silently re-authenticate without plumbing creds through every
+        # call site.
+        self._user: str | None = None
+        self._password: str | None = None
+
+        # Alternative GUI CGI API state. ``_cgi_csrf`` is the value we
+        # must echo back as the ``XSRF-TOKEN`` header on every subsequent
+        # request; it's extracted from the ``HTTP_CSRF_TOKEN`` cookie
+        # FMG sets during the flatui_auth login flow. Cookies themselves
+        # ride on ``self._http``'s cookie jar automatically.
+        self._cgi_csrf: str | None = None
+
+        # Per-client encyclopedia cache. Keyed on (source, id) — two
+        # separate FMG hosts necessarily get their own ``FMGClient``
+        # instances so the host dimension is implicit.
+        self._ency_cache: dict[tuple[str, int], tuple[float, dict[str, Any]]] = {}
 
     def _is_login_request(self, method: str, params: list[dict[str, Any]]) -> bool:
         if method != "exec":
@@ -130,6 +164,10 @@ class FMGClient:
         self._session = body.get("session")
         if not self._session:
             raise RuntimeError("FMG login failed — no session token returned")
+        # Stash for the alt-API session, which expires independently of
+        # the JSON-RPC session and needs a silent re-auth path.
+        self._user = username
+        self._password = password
         logger.info("FMG login successful")
 
     async def logout(self) -> None:
@@ -139,6 +177,183 @@ class FMGClient:
             except Exception:
                 pass
             self._session = None
+        # Drop any cgi session state too — the cookies live on the
+        # shared httpx client so they'd otherwise leak into the next
+        # login for this host.
+        self._cgi_csrf = None
+        try:
+            self._http.cookies.clear()
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Alternative GUI CGI API (undocumented, unsupported)
+    #
+    # Used only for operations the JSON-RPC API cannot express. At the
+    # moment this is just the FortiGuard encyclopedia lookup backing the
+    # IPS / Application signature hover tooltip. The auth flow is:
+    #   1. POST /cgi-bin/module/flatui_auth with {url, method, params}
+    #      → cookies (CURRENT_SESSION, HTTP_CSRF_TOKEN) are set on the
+    #        response.
+    #   2. Every subsequent call echoes HTTP_CSRF_TOKEN back as an
+    #      ``XSRF-TOKEN`` header. Cookies ride on httpx automatically.
+    # ------------------------------------------------------------------
+
+    async def _cgi_login(self) -> None:
+        """Authenticate against the alt-API using the stashed JSON-RPC creds."""
+        if not self._host:
+            raise RuntimeError("FMG host not configured")
+        if not self._user or not self._password:
+            # We only stash credentials on login_with_credentials(), so
+            # this branch indicates the client was constructed without a
+            # full login. Fail loud rather than silently 401.
+            raise RuntimeError(
+                "FMG alt-API login requires credentials — call "
+                "login_with_credentials() first"
+            )
+        url = f"https://{self._host}/cgi-bin/module/flatui_auth"
+        body = {
+            "url": "/gui/userauth",
+            "method": "login",
+            "params": {
+                "secretkey": self._password,
+                "logintype": 0,
+                "username": self._user,
+            },
+        }
+        resp = await self._http.post(
+            url,
+            json=body,
+            headers={"Content-Type": "application/json"},
+        )
+        resp.raise_for_status()
+        # httpx stores Set-Cookie values in resp.cookies; we need to
+        # extract the CSRF token so we can echo it in the XSRF-TOKEN
+        # header for subsequent calls. HTTP_CSRF_TOKEN persists in the
+        # shared client jar too, so either source works.
+        csrf = resp.cookies.get("HTTP_CSRF_TOKEN") or self._http.cookies.get(
+            "HTTP_CSRF_TOKEN"
+        )
+        if not csrf:
+            raise RuntimeError(
+                "FMG alt-API login returned no HTTP_CSRF_TOKEN cookie"
+            )
+        self._cgi_csrf = csrf
+        logger.info("FMG alt-API login successful (host=%s)", self._host)
+
+    async def _cgi_ensure_login(self) -> None:
+        if self._cgi_csrf is None:
+            await self._cgi_login()
+
+    async def _cgi_call(
+        self,
+        module: str,
+        body: dict[str, Any],
+        *,
+        referer_path: str = "/",
+        retry_on_session_error: bool = True,
+    ) -> dict[str, Any]:
+        """POST to a ``cgi-bin/module/<module>`` endpoint.
+
+        Handles silent re-login on session expiry and returns the parsed
+        JSON body (``{code, data, errors, message}`` for productapi).
+        """
+        await self._cgi_ensure_login()
+        url = f"https://{self._host}/cgi-bin/module/{module}"
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/plain, */*",
+            "Referer": f"https://{self._host}{referer_path}",
+            "Origin": f"https://{self._host}",
+        }
+        if self._cgi_csrf:
+            headers["XSRF-TOKEN"] = self._cgi_csrf
+        # `nocache` mirrors what the FMG web UI sends — a millisecond
+        # timestamp as a cachebuster query param. Harmless elsewhere,
+        # but productapi has been observed to 304 without it on some
+        # builds, so we keep the habit.
+        params = {"nocache": str(int(time.time() * 1000))}
+        resp = await self._http.post(url, json=body, headers=headers, params=params)
+
+        # Session-expiry shows up as HTTP 401/403 or a code != 0 with a
+        # message mentioning "session". Re-login once and retry.
+        if resp.status_code in (401, 403) and retry_on_session_error:
+            logger.info("FMG alt-API session expired (HTTP %s); re-auth", resp.status_code)
+            self._cgi_csrf = None
+            try:
+                self._http.cookies.clear()
+            except Exception:
+                pass
+            return await self._cgi_call(
+                module, body, referer_path=referer_path, retry_on_session_error=False
+            )
+
+        resp.raise_for_status()
+        parsed = resp.json()
+
+        # productapi envelope: {code, data, errors, message}. A non-zero
+        # code with a session-flavored message is the "retry once" path.
+        code = parsed.get("code")
+        msg = str(parsed.get("message", ""))
+        if code not in (0, None):
+            low = msg.lower()
+            if retry_on_session_error and ("session" in low or "login" in low or "auth" in low):
+                logger.info("FMG alt-API code=%s msg=%r; re-auth and retry", code, msg)
+                self._cgi_csrf = None
+                try:
+                    self._http.cookies.clear()
+                except Exception:
+                    pass
+                return await self._cgi_call(
+                    module,
+                    body,
+                    referer_path=referer_path,
+                    retry_on_session_error=False,
+                )
+            raise RuntimeError(f"FMG alt-API error code={code} message={msg}")
+        return parsed
+
+    async def fetch_encyclopedia(self, source: str, signature_id: int) -> dict[str, Any]:
+        """Return the FortiGuard encyclopedia record for a signature.
+
+        ``source`` is ``"ips"`` or ``"app"``; ``signature_id`` is the
+        numeric rule-id (IPS) or app id. The response ``data`` block
+        carries every field the FMG GUI renders in its signature detail
+        pane — Name, Risk, Summary, DefaultAction, CVE, os_list,
+        app_list, Released/Updated, etc. Cached in-process for 24 h
+        since this data is static per FortiGuard release.
+        """
+        if source not in ("ips", "app"):
+            raise ValueError(f"Encyclopedia source must be 'ips' or 'app', got {source!r}")
+        key = (source, int(signature_id))
+        now = time.monotonic()
+        hit = self._ency_cache.get(key)
+        if hit and now - hit[0] < _ENCY_TTL_SECONDS:
+            return hit[1]
+
+        referer = (
+            "/ui/pno/pno_obj_ipssign" if source == "ips" else "/ui/pno/pno_obj_appsignature"
+        )
+        body = {
+            "url": "/v1/fgd/lookup/ency",
+            "params": {"source": source, "id": int(signature_id)},
+            # `id` here is a client-side correlation token, not the
+            # signature id. The FMG UI sends a UUID; any stable string
+            # works, but we keep it unique-ish per request.
+            "id": f"ency-{source}-{signature_id}",
+            "method": "get",
+        }
+        envelope = await self._cgi_call(
+            "productapi", body, referer_path=referer
+        )
+        data = envelope.get("data")
+        if not isinstance(data, dict):
+            raise RuntimeError(
+                f"FMG encyclopedia lookup returned no data block "
+                f"(source={source}, id={signature_id}, envelope={envelope!r})"
+            )
+        self._ency_cache[key] = (now, data)
+        return data
 
     # ------------------------------------------------------------------
     # Profile retrieval — URL patterns per profile type
@@ -338,23 +553,38 @@ class FMGClient:
         )
         return data if isinstance(data, list) else []
 
-    async def get_profile_defaults(self, profile_type: str) -> dict[str, Any]:
-        """Fetch the default field values for a profile type using FMG syntax API."""
-        url_tpl = self.PROFILE_URLS.get(profile_type)
-        if not url_tpl:
-            return {}
-        url = url_tpl.format(adom=self._adom)
+    # ------------------------------------------------------------------
+    # Schema / syntax queries
+    # ------------------------------------------------------------------
+
+    async def get_syntax(self, url: str) -> Any:
+        """Fetch the FMG schema/syntax definition for any URL.
+
+        Returns the raw `data` payload from a `get` call with
+        `option=["syntax"]`. Callers are responsible for walking the
+        resulting `attr`/`subobj` tree. Returns an empty dict on failure
+        rather than raising — schema fetches are best-effort UX polish,
+        never load-bearing for correctness.
+        """
         try:
             data = await self._call(
                 "get",
-                [{"url": url, "option": "syntax", "data": {"flag": "default"}}],
+                [{"url": url, "option": ["syntax"]}],
                 verbose=True,
             )
-            if isinstance(data, dict):
-                return data
+            return data if data is not None else {}
         except Exception as e:
-            logger.warning(f"Failed to fetch defaults for {profile_type}: {e}")
-        return {}
+            logger.warning(f"Failed to fetch syntax for {url}: {e}")
+            return {}
+
+    def profile_url(self, profile_type: str) -> str | None:
+        """Resolve a profile type to its ADOM-qualified FMG URL."""
+        if profile_type == "sdwan":
+            return self.SDWAN_LIST_URL.format(adom=self._adom)
+        tpl = self.PROFILE_URLS.get(profile_type)
+        if not tpl:
+            return None
+        return tpl.format(adom=self._adom)
 
 
 # Singleton

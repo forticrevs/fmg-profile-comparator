@@ -31,9 +31,11 @@ interface Props {
   profileType: ProfileType;
   profiles: string[];
   selected: Set<string>;
+  baseline: string | null;
   loading: boolean;
   onToggle: (name: string) => void;
   onSelectAll: () => void;
+  onBaselineChange: (name: string | null) => void;
   onCompare: () => void;
   onBack: () => void;
 }
@@ -42,9 +44,11 @@ export default function ProfilePicker({
   profileType,
   profiles,
   selected,
+  baseline,
   loading,
   onToggle,
   onSelectAll,
+  onBaselineChange,
   onCompare,
   onBack,
 }: Props) {
@@ -122,37 +126,71 @@ export default function ProfilePicker({
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
           {filtered.map((name) => {
             const isSelected = selected.has(name);
+            const isBaseline = baseline === name;
             return (
-              <button
+              <div
                 key={name}
-                onClick={() => onToggle(name)}
-                className={`relative text-left px-4 py-3 rounded-lg border transition-all duration-150 ${
-                  isSelected
+                className={`relative rounded-lg border transition-all duration-150 ${
+                  isBaseline
+                    ? "baseline-pulse bg-emerald-950/30 border-emerald-700/60"
+                    : isSelected
                     ? "bg-cyan-950/40 border-cyan-600 shadow-md shadow-cyan-900/10"
                     : "bg-slate-900/50 border-slate-800 hover:border-slate-600 hover:bg-slate-900"
                 }`}
               >
-                {/* Selection indicator */}
-                <div className="flex items-center gap-2.5">
-                  <div
-                    className={`w-5 h-5 rounded-md border-2 flex items-center justify-center text-xs transition ${
-                      isSelected
-                        ? "border-cyan-500 bg-cyan-600 text-white"
-                        : "border-slate-600 text-transparent"
-                    }`}
-                  >
-                    ✓
+                <button
+                  type="button"
+                  onClick={() => onToggle(name)}
+                  className="w-full text-left px-4 py-3 pr-9"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <div
+                      className={`w-5 h-5 rounded-md border-2 flex items-center justify-center text-xs transition ${
+                        isSelected
+                          ? "border-cyan-500 bg-cyan-600 text-white"
+                          : "border-slate-600 text-transparent"
+                      }`}
+                    >
+                      ✓
+                    </div>
+                    <span
+                      className={`font-mono text-sm truncate ${
+                        isBaseline
+                          ? "text-emerald-200"
+                          : isSelected
+                          ? "text-cyan-300"
+                          : "text-slate-300"
+                      }`}
+                      title={name}
+                    >
+                      <HighlightText text={name} query={search} />
+                    </span>
                   </div>
-                  <span
-                    className={`font-mono text-sm truncate ${
-                      isSelected ? "text-cyan-300" : "text-slate-300"
+                </button>
+
+                {/* Baseline toggle — only meaningful once selected */}
+                {isSelected && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onBaselineChange(isBaseline ? null : name);
+                    }}
+                    title={
+                      isBaseline
+                        ? "Unset as baseline"
+                        : "Set as baseline (drift reference)"
+                    }
+                    className={`absolute top-1.5 right-1.5 w-6 h-6 rounded flex items-center justify-center text-sm transition ${
+                      isBaseline
+                        ? "text-emerald-300 hover:text-emerald-200"
+                        : "text-slate-600 hover:text-emerald-400"
                     }`}
-                    title={name}
                   >
-                    <HighlightText text={name} query={search} />
-                  </span>
-                </div>
-              </button>
+                    {isBaseline ? "★" : "☆"}
+                  </button>
+                )}
+              </div>
             );
           })}
         </div>
@@ -163,26 +201,52 @@ export default function ProfilePicker({
         <div className="sticky bottom-4 bg-slate-900/95 backdrop-blur-sm border border-slate-700 rounded-xl p-4 shadow-2xl">
           <div className="flex items-center gap-4">
             <span className="text-sm text-slate-400 shrink-0">
-              {selected.size} selected:
+              {selected.size} selected
+              {baseline && (
+                <span className="ml-1 text-emerald-400">
+                  · baseline: <span className="font-mono">{baseline}</span>
+                </span>
+              )}
+              :
             </span>
             <div className="flex flex-wrap gap-2 min-w-0 flex-1">
-              {Array.from(selected).map((name) => (
-                <span
-                  key={name}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-cyan-950/50 border border-cyan-800/50 rounded-md text-xs text-cyan-300 font-mono"
-                >
-                  {name}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onToggle(name);
-                    }}
-                    className="text-cyan-600 hover:text-cyan-300 ml-0.5"
+              {Array.from(selected).map((name) => {
+                const isBaseline = baseline === name;
+                return (
+                  <span
+                    key={name}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono border ${
+                      isBaseline
+                        ? "bg-emerald-950/50 border-emerald-700/60 text-emerald-200"
+                        : "bg-cyan-950/50 border-cyan-800/50 text-cyan-300"
+                    }`}
                   >
-                    ×
-                  </button>
-                </span>
-              ))}
+                    {isBaseline && (
+                      <span
+                        className="text-emerald-400 text-[10px]"
+                        title="Baseline"
+                      >
+                        ★
+                      </span>
+                    )}
+                    {name}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggle(name);
+                      }}
+                      className={`ml-0.5 ${
+                        isBaseline
+                          ? "text-emerald-600 hover:text-emerald-300"
+                          : "text-cyan-600 hover:text-cyan-300"
+                      }`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                );
+              })}
             </div>
             <button
               disabled={selected.size < 2}

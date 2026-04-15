@@ -46,6 +46,47 @@ export default function ToolsPage() {
         </section>
 
         <section className="space-y-3">
+          <h2 className="text-base font-semibold text-slate-300">
+            Policy inspection
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Link
+              href="/tools/policy-viewer"
+              className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 hover:border-cyan-500/40 hover:bg-cyan-500/5 transition group"
+            >
+              <h3 className="text-sm font-semibold text-slate-200 group-hover:text-cyan-300">
+                Policy viewer
+              </h3>
+              <p className="mt-2 text-xs text-slate-500 leading-relaxed">
+                Browse firewall policies across every package in the active
+                ADOM. Hover any address or service to see its resolved
+                definition — objects are pre-fetched on load and cached for
+                5 minutes.
+              </p>
+              <span className="mt-3 inline-block text-[10px] uppercase tracking-wide text-cyan-500">
+                Open tool →
+              </span>
+            </Link>
+            <Link
+              href="/tools/policy-shadow"
+              className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 hover:border-cyan-500/40 hover:bg-cyan-500/5 transition group"
+            >
+              <h3 className="text-sm font-semibold text-slate-200 group-hover:text-cyan-300">
+                Policy shadow analyzer
+              </h3>
+              <p className="mt-2 text-xs text-slate-500 leading-relaxed">
+                Detect shadowed, redundant, and conflicting rules across one
+                or more packages in the active ADOM. Runs out of process and
+                produces HTML, XLSX, and JSON reports.
+              </p>
+              <span className="mt-3 inline-block text-[10px] uppercase tracking-wide text-cyan-500">
+                Open tool →
+              </span>
+            </Link>
+          </div>
+        </section>
+
+        <section className="space-y-3">
           <h2 className="text-base font-semibold text-slate-300">Diff</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Link

@@ -200,6 +200,8 @@ export interface ComparisonField {
   label: string;
   values: Record<string, unknown>;
   in_sync: boolean;
+  /** Per-profile drift map. Empty when no baseline was set. */
+  differs_from_baseline?: Record<string, boolean>;
 }
 
 export interface ComparisonResponse {
@@ -208,7 +210,8 @@ export interface ComparisonResponse {
   fields: ComparisonField[];
   collection_keys: string[];
   raw_profiles: Record<string, Record<string, unknown>>;
-  defaults: Record<string, unknown>;
+  /** Echo of the baseline profile name when one was set. */
+  baseline?: string | null;
 }
 
 export interface PinnedFieldsResponse {
@@ -237,9 +240,12 @@ export async function fetchProfiles(type: string): Promise<string[]> {
 
 export async function compareProfiles(
   type: string,
-  names: string[]
+  names: string[],
+  baseline: string | null = null,
 ): Promise<ComparisonResponse> {
-  const params = names.map((n) => `name=${encodeURIComponent(n)}`).join("&");
+  const parts = names.map((n) => `name=${encodeURIComponent(n)}`);
+  if (baseline) parts.push(`baseline=${encodeURIComponent(baseline)}`);
+  const params = parts.join("&");
   const res = await authFetch(`${API_BASE}/api/profiles/${type}/compare?${params}`);
   if (!res.ok) throw new Error("Failed to compare profiles");
   return res.json();
@@ -327,6 +333,250 @@ export async function fetchDlpDictionaries(): Promise<ReferenceListResponse> {
 export async function fetchDlpDataTypes(): Promise<ReferenceListResponse> {
   const res = await authFetch(`${API_BASE}/api/reference/dlp-data-types`);
   if (!res.ok) throw new Error("Failed to fetch DLP data types");
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// FortiGuard encyclopedia — hover tooltip lookups
+//
+// These call the undocumented FMG GUI CGI API (productapi) on the backend.
+// The two response shapes share a common core (Name/Risk/Summary/etc) plus
+// source-specific extensions (IPS: CVE/VulnType/DetectionAvailability; App:
+// Category/Vendor/AppPort/References). We model them as a discriminated
+// union keyed on `Type`.
+// ---------------------------------------------------------------------------
+
+export interface EncyclopediaBase {
+  ID: number;
+  Name: string;
+  Risk: string;
+  RiskID: number;
+  Summary: string;
+  Symptoms: string;
+  Analysis: string;
+  Action: string;
+  DefaultAction: string;
+  BehaviorList: string[];
+  os_list: string[];
+  app_list: string[];
+  Released: string;
+  Created: string;
+  Updated: string;
+}
+
+export interface IpsEncyclopedia extends EncyclopediaBase {
+  Type: "ips";
+  CVE: string;
+  cve_id: string;
+  max_epss: string;
+  kev: unknown[];
+  isActive?: boolean;
+  GroupID?: number;
+  VulnType: string;
+  SecurityRefs: unknown[];
+  OutbreakAlert: unknown[];
+  ThreatSignal: unknown[] | null;
+  DetectionAvailability: {
+    product: string;
+    sigdb: string;
+    status: boolean;
+  }[];
+  Telemetry?: boolean;
+}
+
+export interface ApplicationEncyclopedia extends EncyclopediaBase {
+  Type: "app";
+  Category: string;
+  CVE: string | null;
+  Popularity: number;
+  AppPort: string;
+  References: string[];
+  DeepAppCtrl: boolean;
+  Vendor: string;
+  Deprecated: boolean;
+  Language: string;
+  Technology: string[];
+  RequireApp?: { vuln_id: number; vuln_name: string }[];
+  ApplicationCategory?: number;
+  OutbreakAlert?: unknown[];
+  ThreatSignal?: unknown[] | null;
+}
+
+export type EncyclopediaResponse = IpsEncyclopedia | ApplicationEncyclopedia;
+
+export async function fetchIpsEncyclopedia(
+  signatureId: number,
+): Promise<IpsEncyclopedia> {
+  const res = await authFetch(
+    `${API_BASE}/api/reference/ips-signatures/${signatureId}/encyclopedia`,
+  );
+  if (!res.ok) throw new Error("Failed to fetch IPS encyclopedia");
+  return res.json();
+}
+
+export async function fetchApplicationEncyclopedia(
+  signatureId: number,
+): Promise<ApplicationEncyclopedia> {
+  const res = await authFetch(
+    `${API_BASE}/api/reference/application-signatures/${signatureId}/encyclopedia`,
+  );
+  if (!res.ok) throw new Error("Failed to fetch application encyclopedia");
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Internet Service Database (ISDB) — proxied through FMG to a managed FortiGate
+//
+// FortiManager itself doesn't host these APIs; we pipe every call through
+// /sys/proxy/json to a user-selected FortiGate. The first feature to ship on
+// this surface is the FQDN catalog (FortiGuard's map of well-known SaaS
+// FQDN groups). IP lookup lands in a follow-up task.
+// ---------------------------------------------------------------------------
+
+export interface IsdbDevice {
+  name: string;
+  hostname: string | null;
+  platform: string | null;
+  os_version: string;
+  ip: string | null;
+  ha_mode: string | null;
+  conn_status: string | null;
+}
+
+export interface IsdbFqdnGroup {
+  name: string;
+  fqdns: string[];
+}
+
+export interface IsdbFqdnCatalog {
+  device: string;
+  vdom: string;
+  cached: boolean;
+  group_count: number;
+  fqdn_count: number;
+  groups: IsdbFqdnGroup[];
+  fetched_at: number;
+}
+
+export async function fetchIsdbDevices(): Promise<IsdbDevice[]> {
+  const res = await authFetch(`${API_BASE}/api/tools/isdb/devices`);
+  if (!res.ok) throw new Error("Failed to fetch managed FortiGates");
+  const data = await res.json();
+  return data.devices ?? [];
+}
+
+export async function fetchIsdbFqdnCatalog(
+  device: string,
+  vdom: string = "root",
+  refresh: boolean = false,
+): Promise<IsdbFqdnCatalog> {
+  const qs = new URLSearchParams({ device, vdom });
+  if (refresh) qs.set("refresh", "true");
+  const res = await authFetch(
+    `${API_BASE}/api/tools/isdb/fqdn?${qs.toString()}`,
+  );
+  if (!res.ok) {
+    // Surface the backend error message so the UI can show "device
+    // offline" / "proxy timeout" instead of a generic failure.
+    let detail = "FQDN catalog lookup failed";
+    try {
+      const body = await res.json();
+      if (typeof body?.detail === "string") detail = body.detail;
+    } catch {
+      /* non-JSON error body — keep the generic message */
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+/* ----- IP lookup shapes ----- */
+
+export interface IsdbReverseDns {
+  ok: boolean;
+  resolved?: boolean;
+  domain?: string | null;
+  error?: string;
+}
+
+export interface GeoipLocation {
+  city?: { geoname_id?: number; names?: Record<string, string> };
+  continent?: { code?: string; names?: Record<string, string> };
+  country?: { iso_code?: string; names?: Record<string, string> };
+  location?: {
+    latitude?: number;
+    longitude?: number;
+    time_zone?: string;
+    accuracy_radius?: number;
+  };
+  postal?: { code?: string };
+  subdivisions?: { iso_code?: string; names?: Record<string, string> }[];
+}
+
+export interface IsdbGeoip {
+  ok: boolean;
+  location?: GeoipLocation;
+  fallback?: boolean;
+  error?: string;
+}
+
+export interface IsdbServiceMatch {
+  id: number;
+  name?: string;
+  num_matched_services?: number;
+  owner?: { id?: number; name?: string };
+  reputation?: number;
+  popularity?: number;
+  botnet_id?: number;
+  domain_id?: number;
+  country_id?: number;
+  region_id?: number;
+  city_id?: number;
+  blocklist?: { vendor_id: number; reason_id: number }[];
+}
+
+export interface IsdbMatchesSection {
+  ok: boolean;
+  services: IsdbServiceMatch[];
+  error?: string;
+  match_error?: string;
+  reputation_error?: string;
+}
+
+export interface IsdbLookupResponse {
+  device: string;
+  vdom: string;
+  input: string;
+  ip: string;
+  is_ipv6: boolean;
+  resolved_from_fqdn: string | null;
+  reverse_dns: IsdbReverseDns;
+  geoip: IsdbGeoip;
+  matches: IsdbMatchesSection;
+  cached: boolean;
+  fetched_at: number;
+}
+
+export async function fetchIsdbIpLookup(
+  device: string,
+  target: string,
+  vdom: string = "root",
+): Promise<IsdbLookupResponse> {
+  const res = await authFetch(`${API_BASE}/api/tools/isdb/lookup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ device, target, vdom }),
+  });
+  if (!res.ok) {
+    let detail = "ISDB lookup failed";
+    try {
+      const body = await res.json();
+      if (typeof body?.detail === "string") detail = body.detail;
+    } catch {
+      /* keep generic */
+    }
+    throw new Error(detail);
+  }
   return res.json();
 }
 

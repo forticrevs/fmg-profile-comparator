@@ -19,9 +19,12 @@ import {
   ReferenceListResponse,
 } from "@/lib/api";
 import SharedActionBadge from "@/components/ActionBadge";
+import DataGrid, { type DataGridColumn } from "@/components/DataGrid";
 import FieldVisibilityMenu, {
   loadHiddenFields,
+  saveHiddenFields,
 } from "@/components/FieldVisibilityMenu";
+import SignatureTooltip from "@/components/SignatureTooltip";
 
 type ReferenceKind =
   | "application-signatures"
@@ -52,6 +55,102 @@ const OPERATOR_LABELS: Record<FilterOperator, string> = {
   equals: "Equals",
   regex: "Regex",
 };
+
+/* ------------------------------------------------------------------ */
+/* Per-reference defaults                                              */
+/*                                                                     */
+/* On first visit (or after a version bump) a reference page seeds    */
+/* its visibility + column order from this config. The IPS catalog is  */
+/* the obvious case: FMG returns ~35 fields per rule, most of them     */
+/* internal bookkeeping, and a fresh user should land on the 11 that   */
+/* actually matter for signature triage.                               */
+/*                                                                     */
+/* `widths` lets a column claim extra horizontal space via a CSS       */
+/* grid-template fragment — `name` is the most important column in    */
+/* the IPS view, so it gets an oversize share plus a hard minimum.     */
+/*                                                                     */
+/* `DEFAULTS_VERSION` is a manual migration trigger. Bump it when the  */
+/* shipped defaults change semantically — every browser that still     */
+/* holds an older version will re-apply the new defaults exactly once  */
+/* and then respect subsequent customizations. Skipping this knob      */
+/* would either never reset (stale customers keep broken layouts) or   */
+/* reset every visit (would destroy customizations).                   */
+/* ------------------------------------------------------------------ */
+const DEFAULTS_VERSION = 2;
+
+interface ReferenceDefaults {
+  visibleColumns: string[];
+  columnOrder: string[];
+  widths?: Record<string, string>;
+}
+
+const REFERENCE_DEFAULTS: Partial<Record<ReferenceKind, ReferenceDefaults>> = {
+  "ips-signatures": {
+    // Ordered: name first (most important), then the other ten in the
+    // alphabetical order the user requested.
+    columnOrder: [
+      "name",
+      "action",
+      "application",
+      "cve",
+      "date",
+      "group",
+      "location",
+      "os",
+      "service",
+      "severity",
+      "vuln_type",
+    ],
+    visibleColumns: [
+      "name",
+      "action",
+      "application",
+      "cve",
+      "date",
+      "group",
+      "location",
+      "os",
+      "service",
+      "severity",
+      "vuln_type",
+    ],
+    widths: {
+      // Name gets an oversize share plus a 260px hard minimum so long
+      // signature names (e.g. "SIP.Invite.Header.Buffer.Overflow") stay
+      // readable even when the viewport is narrow.
+      name: "minmax(260px, 3fr)",
+    },
+  },
+};
+
+/* Column order persistence — keyed per visibilityKey. Ordering is
+ * orthogonal to visibility, so it gets its own localStorage entry
+ * rather than piggybacking on the hidden-fields blob. */
+function loadColumnOrder(storageKey: string): string[] | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(`colorder:${storageKey}`);
+    if (!raw) return null;
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) && arr.every((s) => typeof s === "string")
+      ? arr
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveColumnOrder(storageKey: string, order: string[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      `colorder:${storageKey}`,
+      JSON.stringify(order),
+    );
+  } catch {
+    /* ignore quota / privacy mode failures */
+  }
+}
 
 /* ------------------------------------------------------------------ */
 /* Action colour helpers                                               */
@@ -250,7 +349,7 @@ function NestedTable({
   }, [items]);
 
   return (
-    <div className="rounded-md border border-slate-700/50 overflow-hidden">
+    <div data-no-clamp className="rounded-md border border-slate-700/50 overflow-hidden">
       <table className="w-full border-collapse text-[11px]">
         <thead>
           <tr className="bg-slate-800/60">
@@ -436,6 +535,13 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
     return [...keys];
   }, [data]);
 
+  // Reference pages don't have a FMG syntax schema — FortiGuard tables
+  // (`_application/list`, `_rule/list`, `_fdsdb/*`) ignore
+  // `option=["syntax"]` and just return data, so we use data-discovered
+  // columns only. The visibility menu still works; it just has no help
+  // tooltips or schema-only "(empty)" columns for these pages.
+  const availableColumns = detectedColumns;
+
   // Per-reference column visibility (persisted to localStorage). Tracks
   // *hidden* column names so newly-discovered columns default to visible.
   const visibilityKey = `ref:${kind}`;
@@ -452,12 +558,77 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
     return ordered.filter((c) => !hiddenColumns.has(c));
   }, [columnOrder, detectedColumns, hiddenColumns]);
 
-  // Sync detected columns into column order when data first loads
+  // Seed column order + visibility on first data load, or migrate an
+  // older `refcols-init:<key>` sentinel forward. Three paths:
+  //
+  //  1. No stored sentinel OR stored version < DEFAULTS_VERSION → apply
+  //     the per-kind defaults and stamp the current version into the
+  //     sentinel. This catches brand-new browsers AND any browser that
+  //     was opened before a defaults change (including the v1→v2 bump
+  //     introduced to fix the original prior-prefs guard mistake).
+  //
+  //  2. Stored version == DEFAULTS_VERSION → defaults already applied.
+  //     Restore persisted column order if any, otherwise fall back to
+  //     detected order so drag-and-drop tweaks survive reloads.
+  //
+  //  3. No defaults for this kind → behave as before: column order
+  //     mirrors detected order, no sentinel touched.
   useEffect(() => {
-    if (detectedColumns.length > 0 && columnOrder === null) {
+    if (detectedColumns.length === 0 || columnOrder !== null) return;
+
+    const defaults = REFERENCE_DEFAULTS[kind];
+    const initFlag = `refcols-init:${visibilityKey}`;
+    const storedVersion =
+      typeof window !== "undefined"
+        ? Number.parseInt(
+            window.localStorage.getItem(initFlag) ?? "",
+            10,
+          )
+        : NaN;
+    const needsMigration =
+      !Number.isFinite(storedVersion) || storedVersion < DEFAULTS_VERSION;
+
+    if (defaults && needsMigration) {
+      // First visit, or migrating from an older defaults version.
+      // Ignore filter sections entirely in the detected universe we
+      // hide from — if FMG's `_rule/list` ever grows a new field we
+      // don't know about, appending it to the trailing order means it
+      // remains hideable via the menu without silently vanishing.
+      const detectedSet = new Set(detectedColumns);
+      const wantedOrder = defaults.columnOrder.filter((c) =>
+        detectedSet.has(c),
+      );
+      const wantedSet = new Set(wantedOrder);
+      const trailing = detectedColumns.filter((c) => !wantedSet.has(c));
+      const newOrder = [...wantedOrder, ...trailing];
+
+      const visibleSet = new Set(defaults.visibleColumns);
+      const newHidden = new Set(
+        detectedColumns.filter((c) => !visibleSet.has(c)),
+      );
+
+      setColumnOrder(newOrder);
+      setHiddenColumns(newHidden);
+      saveColumnOrder(visibilityKey, newOrder);
+      saveHiddenFields(visibilityKey, newHidden);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(initFlag, String(DEFAULTS_VERSION));
+      }
+      return;
+    }
+
+    // Returning visit (or no defaults configured) — restore persisted
+    // order if any, otherwise fall back to detected order.
+    const persisted = loadColumnOrder(visibilityKey);
+    if (persisted) {
+      const detectedSet = new Set(detectedColumns);
+      const kept = persisted.filter((c) => detectedSet.has(c));
+      const trailing = detectedColumns.filter((c) => !kept.includes(c));
+      setColumnOrder([...kept, ...trailing]);
+    } else {
       setColumnOrder(detectedColumns);
     }
-  }, [detectedColumns, columnOrder]);
+  }, [detectedColumns, columnOrder, kind, visibilityKey]);
 
   const deferredSearch = useDeferredValue(search);
 
@@ -546,12 +717,13 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
       if (fromIdx === -1 || toIdx === -1) return cols;
       cols.splice(fromIdx, 1);
       cols.splice(toIdx, 0, from);
+      saveColumnOrder(visibilityKey, cols);
       return cols;
     });
 
     dragCol.current = null;
     dragOverCol.current = null;
-  }, [detectedColumns]);
+  }, [detectedColumns, visibilityKey]);
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
@@ -600,7 +772,7 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
 
             <FieldVisibilityMenu
               storageKey={visibilityKey}
-              available={detectedColumns}
+              available={availableColumns}
               hidden={hiddenColumns}
               onChange={setHiddenColumns}
               buttonLabel="Columns"
@@ -709,71 +881,93 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
             </div>
           ) : (
             <>
-              <div className="overflow-x-auto rounded-xl border border-slate-800">
-                <table className="w-full border-collapse">
-                  <thead className="sticky top-0 bg-slate-950 z-10">
-                    <tr className="border-b border-slate-800">
-                      {columns.map((column) => (
-                        <th
-                          key={column}
-                          draggable
-                          onDragStart={() => handleDragStart(column)}
-                          onDragOver={(e) => handleDragOver(e, column)}
-                          onDrop={handleDrop}
-                          className="px-3 py-3 text-left align-bottom text-[11px] font-semibold uppercase tracking-wide text-slate-400 cursor-grab active:cursor-grabbing select-none whitespace-nowrap"
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="text-slate-600 text-[10px]">⠿</span>
-                            <span className="truncate">{column}</span>
-                            <button
-                              onClick={() => addFilter(column)}
-                              className="rounded border border-slate-800 px-1.5 py-0.5 text-[10px] text-slate-500 transition hover:border-slate-700 hover:text-slate-300"
-                              title={`Filter ${column}`}
-                            >
-                              +
-                            </button>
-                          </div>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {paginatedItems.map((item, index) => (
-                      <tr
-                        key={`${kind}-${(safePage - 1) * pageSize + index}`}
-                        className="border-b border-slate-900 align-top hover:bg-slate-800/20 transition-colors"
+              <DataGrid
+                columns={columns.map<DataGridColumn<Record<string, unknown>>>((column) => ({
+                  key: column,
+                  width: REFERENCE_DEFAULTS[kind]?.widths?.[column],
+                  headerProps: {
+                    draggable: true,
+                    onDragStart: () => handleDragStart(column),
+                    onDragOver: (e) => handleDragOver(e, column),
+                    onDrop: handleDrop,
+                    className: "cursor-grab active:cursor-grabbing",
+                  },
+                  header: (
+                    <div className="flex items-center gap-2">
+                      <span className="text-slate-600 text-[10px]">⠿</span>
+                      <span className="truncate">{column}</span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          addFilter(column);
+                        }}
+                        className="rounded border border-slate-800 px-1.5 py-0.5 text-[10px] text-slate-500 transition hover:border-slate-700 hover:text-slate-300"
+                        title={`Filter ${column}`}
                       >
-                        {columns.map((column) => (
-                          <td
-                            key={column}
-                            className="px-3 py-2.5 align-top"
-                          >
-                            <div className="whitespace-pre-wrap break-words text-xs leading-5 text-slate-200">
-                              <CellContent
-                                value={item[column]}
-                                column={column}
-                                query={deferredSearch}
-                              />
-                            </div>
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-
-                    {paginatedItems.length === 0 && (
-                      <tr>
-                        <td
-                          colSpan={Math.max(columns.length, 1)}
-                          className="px-4 py-10 text-center text-sm text-slate-500"
-                        >
-                          No rows match the current search and filter
-                          criteria.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                        +
+                      </button>
+                    </div>
+                  ),
+                  render: (row) => {
+                    const cell = (
+                      <CellContent
+                        value={row[column]}
+                        column={column}
+                        query={deferredSearch}
+                      />
+                    );
+                    // Name column on IPS/App signature pages is
+                    // wrapped in a hover tooltip that fetches the full
+                    // FortiGuard encyclopedia record on demand. Every
+                    // other column, and every other reference kind,
+                    // renders unchanged.
+                    if (column === "name") {
+                      if (kind === "ips-signatures") {
+                        const id = row["rule-id"];
+                        const name = typeof row.name === "string" ? row.name : "";
+                        if (
+                          typeof id === "number" ||
+                          (typeof id === "string" && id.length > 0)
+                        ) {
+                          return (
+                            <SignatureTooltip
+                              source="ips"
+                              signatureId={id as number | string}
+                              name={name}
+                            >
+                              {cell}
+                            </SignatureTooltip>
+                          );
+                        }
+                      } else if (kind === "application-signatures") {
+                        const id = row.id;
+                        const name = typeof row.name === "string" ? row.name : "";
+                        if (
+                          typeof id === "number" ||
+                          (typeof id === "string" && id.length > 0)
+                        ) {
+                          return (
+                            <SignatureTooltip
+                              source="app"
+                              signatureId={id as number | string}
+                              name={name}
+                            >
+                              {cell}
+                            </SignatureTooltip>
+                          );
+                        }
+                      }
+                    }
+                    return cell;
+                  },
+                }))}
+                rows={paginatedItems}
+                rowKey={(_row, index) =>
+                  `${kind}-${(safePage - 1) * pageSize + index}`
+                }
+                emptyState="No rows match the current search and filter criteria."
+              />
 
               {/* Pagination controls */}
               <div className="flex items-center justify-between gap-4 pt-2">

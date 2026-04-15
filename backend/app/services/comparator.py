@@ -88,17 +88,42 @@ def _belongs_to_collection(key: str, collection_roots: set[str]) -> bool:
     return False
 
 
+def _norm_value(x: Any) -> str:
+    """Normalize a value for sync comparison.
+
+    - Unwraps resolver display wrappers ({raw, display}).
+    - Sorts scalar lists so e.g. ["smtp","pop3"] == ["pop3","smtp"].
+    """
+    if isinstance(x, dict) and "raw" in x:
+        x = x["raw"]
+    if isinstance(x, list):
+        return str(sorted(x, key=str))
+    return str(x)
+
+
 def compare_profiles(
     profiles: dict[str, dict[str, Any]],
     resolver: Any = None,
     excluded_roots: list[str] | None = None,
+    baseline: str | None = None,
 ) -> list[ComparisonField]:
     """Compare N flattened profiles, returning one ComparisonField per unique key.
 
     If a resolver is provided, values are enriched with human-readable names
     where applicable (category IDs, URL filter IDs, etc.).
+
+    When ``baseline`` names a profile present in ``profiles``, drift is
+    computed *against the baseline* rather than N-way symmetrically:
+      - ``in_sync`` becomes "every non-baseline value matches the baseline".
+      - ``differs_from_baseline[name]`` is True for non-baseline profiles
+        whose normalized value differs from the baseline's, False otherwise
+        (the baseline itself is always False).
     """
     collection_roots = set(excluded_roots or [])
+    if baseline is not None and baseline not in profiles:
+        # Silently ignore an unknown baseline rather than 500ing — the
+        # router validates names exist before getting here, but defensive.
+        baseline = None
 
     # Flatten all
     flat: dict[str, dict[str, Any]] = {}
@@ -124,18 +149,22 @@ def compare_profiles(
             else:
                 values[pname] = raw
 
-        # For sync comparison, extract raw values (ignore display wrappers).
-        # Scalar lists are compared order-independently so e.g.
-        # ["smtp","pop3"] and ["pop3","smtp"] are considered in sync.
-        def _norm(x: Any) -> str:
-            if isinstance(x, dict) and "raw" in x:
-                x = x["raw"]
-            if isinstance(x, list):
-                return str(sorted(x, key=str))
-            return str(x)
-
-        raw_vals = {_norm(v) for v in values.values()}
-        in_sync = len(raw_vals) == 1
+        differs_from_baseline: dict[str, bool] = {}
+        if baseline is not None:
+            base_norm = _norm_value(values[baseline])
+            any_drift = False
+            for pname, val in values.items():
+                if pname == baseline:
+                    differs_from_baseline[pname] = False
+                    continue
+                drifted = _norm_value(val) != base_norm
+                differs_from_baseline[pname] = drifted
+                if drifted:
+                    any_drift = True
+            in_sync = not any_drift
+        else:
+            raw_vals = {_norm_value(v) for v in values.values()}
+            in_sync = len(raw_vals) == 1
 
         fields.append(
             ComparisonField(
@@ -143,6 +172,7 @@ def compare_profiles(
                 label=_make_label(key),
                 values=values,
                 in_sync=in_sync,
+                differs_from_baseline=differs_from_baseline,
             )
         )
 

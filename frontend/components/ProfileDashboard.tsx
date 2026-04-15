@@ -181,6 +181,17 @@ export default function ProfileDashboard({ types, onSelectType }: Props) {
               Reference the predefined DLP data types FortiManager exposes for sensor matching.
             </p>
           </Link>
+
+          <Link
+            href="/reference/internet-services"
+            className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 transition-all duration-200 hover:border-emerald-700 hover:bg-slate-900"
+          >
+            <h4 className="text-base font-semibold text-white">Internet Services</h4>
+            <p className="mt-2 text-sm text-slate-500">
+              Browse FortiGuard&apos;s ISDB catalog of SaaS FQDN groups.
+              Lookups proxy through a managed FortiGate of your choice.
+            </p>
+          </Link>
         </div>
       </div>
 
