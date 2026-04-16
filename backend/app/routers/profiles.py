@@ -77,16 +77,25 @@ async def compare(
         except Exception as exc:
             raise HTTPException(502, f"FMG error fetching '{n}': {exc}")
 
-    # Webfilter profiles embed a shared URL filter list under `_url_filter`.
-    # Multiple profiles can reference the same list, so the frontend renders
-    # a dedicated grouped view (`UrlFilterComparison`) — we keep the block
-    # out of both the flat field comparison and SCC so it isn't shown twice
-    # or exploded into hundreds of redundant leaves.
+    # Webfilter profiles have two collection-style blocks we render with
+    # dedicated views instead of the generic SCC table:
+    #   * `_url_filter` — the shared URL filter list; rendered by
+    #     `UrlFilterComparison` so shared lists dedupe across profiles.
+    #   * `ftgd-wf.filters` — the FortiGuard category filter set;
+    #     rendered by `WebFilterCategoryTable` above the SCC loop,
+    #     aligned by category name rather than array index.
+    # Both stay in `excluded_roots` so the flat comparison doesn't
+    # explode them into thousands of leaves, but we strip them from the
+    # frontend's `collection_keys` list so the SCC loop doesn't re-render
+    # the same data as a redundant (and poorly-formatted) second table.
     collection_keys_all = find_collection_keys(profiles)
     url_filter_roots = {"_url_filter"}
     excluded_roots = list(set(collection_keys_all) | url_filter_roots)
     collection_keys = [
-        k for k in collection_keys_all if not k.startswith("_url_filter")
+        k
+        for k in collection_keys_all
+        if not k.startswith("_url_filter")
+        and not k.startswith("ftgd-wf.filters")
     ]
 
     fields = compare_profiles(

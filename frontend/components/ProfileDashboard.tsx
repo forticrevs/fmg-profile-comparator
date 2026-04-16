@@ -192,6 +192,28 @@ export default function ProfileDashboard({ types, onSelectType }: Props) {
               Lookups proxy through a managed FortiGate of your choice.
             </p>
           </Link>
+
+          <Link
+            href="/reference/local-web-categories"
+            className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 transition-all duration-200 hover:border-cyan-700 hover:bg-slate-900"
+          >
+            <h4 className="text-base font-semibold text-white">Local Web Categories</h4>
+            <p className="mt-2 text-sm text-slate-500">
+              Operator-defined custom webfilter category buckets on top
+              of FortiGuard&apos;s built-in set, with audit trail.
+            </p>
+          </Link>
+
+          <Link
+            href="/reference/web-rating-overrides"
+            className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 transition-all duration-200 hover:border-cyan-700 hover:bg-slate-900"
+          >
+            <h4 className="text-base font-semibold text-white">Web Rating Overrides</h4>
+            <p className="mt-2 text-sm text-slate-500">
+              URL-to-category rating overrides for the active ADOM.
+              Rating IDs auto-resolved to human-readable names.
+            </p>
+          </Link>
         </div>
       </div>
 

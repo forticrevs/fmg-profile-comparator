@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import AuthGuard from "@/components/AuthGuard";
+import ChatWidget from "@/components/ChatWidget";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -18,7 +19,10 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body className={`${inter.className} bg-slate-950 antialiased`}>
-        <AuthGuard>{children}</AuthGuard>
+        <AuthGuard>
+          {children}
+          <ChatWidget />
+        </AuthGuard>
       </body>
     </html>
   );

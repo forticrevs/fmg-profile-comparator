@@ -16,6 +16,8 @@ import {
   fetchDlpSensors,
   fetchDlpDictionaries,
   fetchDlpDataTypes,
+  fetchLocalWebCategories,
+  fetchWebRatingOverrides,
   ReferenceListResponse,
 } from "@/lib/api";
 import SharedActionBadge from "@/components/ActionBadge";
@@ -31,7 +33,9 @@ type ReferenceKind =
   | "ips-signatures"
   | "dlp-sensors"
   | "dlp-dictionaries"
-  | "dlp-data-types";
+  | "dlp-data-types"
+  | "local-web-categories"
+  | "web-rating-overrides";
 type FilterOperator = "contains" | "not_contains" | "equals" | "regex";
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 250, 500];
@@ -115,10 +119,62 @@ const REFERENCE_DEFAULTS: Partial<Record<ReferenceKind, ReferenceDefaults>> = {
       "vuln_type",
     ],
     widths: {
-      // Name gets an oversize share plus a 260px hard minimum so long
-      // signature names (e.g. "SIP.Invite.Header.Buffer.Overflow") stay
-      // readable even when the viewport is narrow.
+      // Name gets an oversize share plus a hard minimum so long
+      // signature names stay readable even when the viewport is narrow.
       name: "minmax(260px, 3fr)",
+    },
+  },
+  "local-web-categories": {
+    // Operator-defined webfilter category buckets. `desc` is the
+    // user-visible name and does the heavy lifting; internal `oid` and
+    // `obj flags` / `obj ver` are hidden by default but still available
+    // from the Fields menu if someone needs them for debugging.
+    columnOrder: [
+      "desc",
+      "id",
+      "status",
+      "_created-by",
+      "_last-modified-by",
+      "_modified timestamp",
+    ],
+    visibleColumns: [
+      "desc",
+      "id",
+      "status",
+      "_created-by",
+      "_last-modified-by",
+      "_modified timestamp",
+    ],
+    widths: {
+      desc: "minmax(220px, 2.5fr)",
+    },
+  },
+  "web-rating-overrides": {
+    // Each entry pins a URL to one or more custom/FortiGuard
+    // categories. `rating_display` is the backend-resolved names;
+    // `rating` keeps the raw IDs alongside for operators who need to
+    // cross-reference by ID.
+    columnOrder: [
+      "url",
+      "rating_display",
+      "rating",
+      "status",
+      "_created-by",
+      "_last-modified-by",
+      "_modified timestamp",
+    ],
+    visibleColumns: [
+      "url",
+      "rating_display",
+      "rating",
+      "status",
+      "_created-by",
+      "_last-modified-by",
+      "_modified timestamp",
+    ],
+    widths: {
+      url: "minmax(240px, 2.5fr)",
+      rating_display: "minmax(160px, 1.3fr)",
     },
   },
 };
@@ -239,6 +295,30 @@ function isDateColumn(col: string): boolean {
   return col.toLowerCase() === "date";
 }
 
+/** FMG returns audit timestamps as Unix-epoch seconds in fields named
+ *  like `_created timestamp` / `_modified timestamp`. Detect them so
+ *  CellContent can render a human-friendly ISO date instead of a
+ *  10-digit blob. Any column whose name ends in " timestamp" counts.
+ */
+function isEpochTimestampColumn(col: string): boolean {
+  return /\stimestamp$/i.test(col);
+}
+
+function formatEpoch(raw: string): string {
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return raw;
+  // FMG returns seconds; JS Date expects milliseconds.
+  const d = new Date(n * 1000);
+  if (Number.isNaN(d.getTime())) return raw;
+  // Render as `YYYY-MM-DD HH:MM` — the seconds are rarely useful
+  // for an audit-log column and the shorter form fits in the grid.
+  const pad = (v: number) => v.toString().padStart(2, "0");
+  return (
+    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* Check if value is an array of objects (needs nested table)          */
 /* ------------------------------------------------------------------ */
@@ -265,6 +345,25 @@ function formatValue(value: unknown): string {
   return String(value);
 }
 
+/** Format a cell value for search — applies the same display transforms
+ *  (CVE dashes, date dashes, epoch→ISO) so users can search by what they see. */
+function formatValueForSearch(col: string, value: unknown): string {
+  const base = formatValue(value);
+  if (base === "—") return base;
+  if (isCVEColumn(col)) {
+    return base
+      .split(", ")
+      .map((v) => formatCVE(v.trim()))
+      .join(", ");
+  }
+  if (isDateColumn(col)) return formatDateValue(base);
+  if (isEpochTimestampColumn(col)) {
+    const n = Number(base);
+    if (!isNaN(n) && n > 1e9) return new Date(n * 1000).toISOString();
+  }
+  return base;
+}
+
 function formatScalar(value: unknown): string {
   if (value === null || value === undefined || value === "") return "—";
   if (typeof value === "object") return JSON.stringify(value);
@@ -283,6 +382,10 @@ function getFetcher(kind: ReferenceKind) {
       return fetchDlpDictionaries;
     case "dlp-data-types":
       return fetchDlpDataTypes;
+    case "local-web-categories":
+      return fetchLocalWebCategories;
+    case "web-rating-overrides":
+      return fetchWebRatingOverrides;
   }
 }
 
@@ -471,6 +574,15 @@ function CellContent({
     );
   }
 
+  // FMG audit epoch timestamp → formatted ISO short
+  if (isEpochTimestampColumn(column) && text !== "—") {
+    return (
+      <span className="text-slate-200 tabular-nums">
+        <HighlightText text={formatEpoch(text)} query={query} />
+      </span>
+    );
+  }
+
   // Default
   return <HighlightText text={text} query={query} />;
 }
@@ -638,8 +750,8 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
 
     return items.filter((item) => {
       if (searchQuery) {
-        const haystack = Object.values(item)
-          .map((value) => formatValue(value))
+        const haystack = Object.entries(item)
+          .map(([col, value]) => formatValueForSearch(col, value))
           .join(" ")
           .toLowerCase();
         if (!haystack.includes(searchQuery)) {
@@ -648,7 +760,7 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
       }
 
       for (const rule of filters) {
-        const value = formatValue(item[rule.column]);
+        const value = formatValueForSearch(rule.column, item[rule.column]);
         if (!matchesFilter(value, rule)) {
           return false;
         }

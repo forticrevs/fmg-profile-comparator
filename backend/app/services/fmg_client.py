@@ -446,20 +446,6 @@ class FMGClient:
                 except Exception:
                     pass
 
-        # Fetch web rating overrides for this ADOM
-        try:
-            rating_url = (
-                f"/pm/config/adom/{self._adom}"
-                f"/obj/webfilter/ftgd-local-rating"
-            )
-            rating_data = await self._call("get", [{
-                "url": rating_url, "fields": ["url", "rating", "status", "comment"]
-            }], verbose=True)
-            if isinstance(rating_data, list) and rating_data:
-                result["_web_rating_overrides"] = rating_data
-        except Exception:
-            pass
-
         return result
 
     # ------------------------------------------------------------------
@@ -549,6 +535,61 @@ class FMGClient:
         data = await self._call(
             "get",
             [{"url": f"pm/config/adom/{self._adom}/_fdsdb/dlp/data-type"}],
+            verbose=True,
+        )
+        return data if isinstance(data, list) else []
+
+    # Rich metadata option set used by the local-cat and local-rating
+    # list endpoints — matches the FMG GUI's own request so we get
+    # ``_created timestamp``, ``_created-by``, ``_modified timestamp``,
+    # ``_last-modified-by``, and ``obj flags`` / ``obj ver`` alongside
+    # the user-facing fields. Without this the response drops audit
+    # metadata, which is the whole reason to surface these as a
+    # reference catalog.
+    _LOCAL_OBJECT_META_OPTS = [
+        "get used",
+        "get flags",
+        "get devobj mapping",
+        "get meta",
+        "extra info",
+        "no loadsub",
+    ]
+
+    async def list_local_web_categories(self) -> list[dict[str, Any]]:
+        """Return the ADOM's custom web categories (``ftgd-local-cat``).
+
+        Each entry carries ``id``, ``desc`` (the user-visible name),
+        ``status`` (1 enabled / 0 disabled), ``oid``, and audit metadata
+        (``_created timestamp``, ``_created-by``, ``_modified timestamp``,
+        ``_last-modified-by``, ``obj flags``, ``obj ver``).
+        """
+        data = await self._call(
+            "get",
+            [{
+                "url": f"/pm/config/adom/{self._adom}/obj/webfilter/ftgd-local-cat",
+                "option": self._LOCAL_OBJECT_META_OPTS,
+            }],
+            verbose=True,
+        )
+        return data if isinstance(data, list) else []
+
+    async def list_web_rating_overrides(self) -> list[dict[str, Any]]:
+        """Return the ADOM's FortiGuard web rating overrides (``ftgd-local-rating``).
+
+        Each entry carries ``url`` (the URL being overridden), ``rating``
+        (an array of webfilter category IDs — usually one, occasionally
+        several when the same URL is tagged with multiple categories),
+        ``status``, ``oid``, and audit metadata mirroring the local-cat
+        shape. The category IDs are *not* resolved here — the reference
+        router joins them against the shared IDResolver before returning
+        to the frontend.
+        """
+        data = await self._call(
+            "get",
+            [{
+                "url": f"/pm/config/adom/{self._adom}/obj/webfilter/ftgd-local-rating",
+                "option": self._LOCAL_OBJECT_META_OPTS,
+            }],
             verbose=True,
         )
         return data if isinstance(data, list) else []

@@ -426,3 +426,76 @@ async def isdb_lookup(
     }
     _lookup_cache[cache_key] = (now, payload)
     return payload
+
+
+# --------------------------------------------------------------------
+# Service details — paginated IP-range entries for a single service
+# --------------------------------------------------------------------
+
+
+class IsdbServiceDetailsRequest(BaseModel):
+    device: str = Field(..., min_length=1)
+    service_id: int
+    vdom: str = "root"
+    start: int = 0
+    count: int = 1000
+    summary_only: bool = False
+
+
+@router.post("/service-details")
+async def isdb_service_details(
+    body: IsdbServiceDetailsRequest,
+    fmg: FMGClient = Depends(get_current_fmg),
+) -> dict[str, Any]:
+    """Fetch IP range entries for a specific internet service.
+
+    Two modes controlled by ``summary_only``:
+
+    - **summary** (``summary_only=true``): returns ``{id, name, total}``
+      so the UI can display the entry count before committing to a
+      potentially huge paginated fetch.
+
+    - **paginated** (default): returns ``{id, name, entries, start,
+      count}`` with up to ``count`` entries starting at ``start``.
+      Services can have millions of entries, so pagination is mandatory.
+    """
+    qs_parts = [
+        f"id={body.service_id}",
+        "ipv6_only=false",
+        "country_id=0",
+        "region_id=0",
+        "city_id=0",
+        f"vdom={body.vdom}",
+    ]
+    if body.summary_only:
+        qs_parts.append("summary_only=true")
+    else:
+        qs_parts.extend([f"start={body.start}", f"count={body.count}"])
+
+    resource = (
+        f"/api/v2/monitor/firewall/internet-service-details"
+        f"?{'&'.join(qs_parts)}"
+    )
+    try:
+        fos_body = await fos_proxy.proxy_call(
+            fmg, body.device, resource, timeout=60
+        )
+    except fos_proxy.FosProxyError as exc:
+        logger.warning("isdb: service-details proxy failed: %s", exc)
+        raise HTTPException(502, str(exc))
+    except Exception as exc:
+        logger.exception("isdb: service-details proxy errored")
+        raise HTTPException(502, f"Service details lookup failed: {exc}")
+
+    results = fos_body.get("results", {})
+    resp: dict[str, Any] = {
+        "id": results.get("id"),
+        "name": results.get("name"),
+        "total": results.get("total"),
+    }
+    if not body.summary_only:
+        resp["entries"] = results.get("entry", [])
+        resp["disable_entries"] = results.get("disable_entry", [])
+        resp["start"] = body.start
+        resp["count"] = body.count
+    return resp

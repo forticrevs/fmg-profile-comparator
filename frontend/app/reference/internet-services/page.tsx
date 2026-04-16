@@ -43,10 +43,12 @@ import {
   fetchIsdbDevices,
   fetchIsdbFqdnCatalog,
   fetchIsdbIpLookup,
+  fetchIsdbServiceDetails,
   type IsdbDevice,
   type IsdbFqdnCatalog,
   type IsdbFqdnGroup,
   type IsdbLookupResponse,
+  type IsdbServiceEntry,
   type IsdbServiceMatch,
 } from "@/lib/api";
 import DataGrid, { type DataGridColumn } from "@/components/DataGrid";
@@ -219,6 +221,58 @@ function Highlight({ text, query }: { text: string; query: string }) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Batch lookup types                                                  */
+/* ------------------------------------------------------------------ */
+interface BatchResult {
+  target: string;
+  status: "pending" | "loading" | "done" | "error";
+  data?: IsdbLookupResponse;
+  error?: string;
+}
+
+interface ServiceDetailState {
+  total: number | null;
+  entries: IsdbServiceEntry[];
+  loading: boolean;
+  error: string | null;
+  loadedCount: number;
+}
+
+function parseTargets(input: string): string[] {
+  return [
+    ...new Set(
+      input
+        .split(/[\n,]+/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    ),
+  ];
+}
+
+const PROTO_NAMES: Record<number, string> = {
+  1: "ICMP",
+  6: "TCP",
+  17: "UDP",
+  47: "GRE",
+  50: "ESP",
+  51: "AH",
+  58: "ICMPv6",
+  132: "SCTP",
+};
+
+function formatPort(p: { start_port: number; end_port: number }): string {
+  return p.start_port === p.end_port
+    ? String(p.start_port)
+    : `${p.start_port}\u2013${p.end_port}`;
+}
+
+function formatIpRange(r: { start_ip: string; end_ip: string }): string {
+  return r.start_ip === r.end_ip
+    ? r.start_ip
+    : `${r.start_ip} \u2013 ${r.end_ip}`;
+}
+
+/* ------------------------------------------------------------------ */
 /* IP lookup render helpers                                            */
 /* ------------------------------------------------------------------ */
 
@@ -290,7 +344,7 @@ function subdivisionName(
 /* ------------------------------------------------------------------ */
 /* IP lookup card                                                      */
 /* ------------------------------------------------------------------ */
-function LookupCard({ data }: { data: IsdbLookupResponse }) {
+function LookupCard({ data, device }: { data: IsdbLookupResponse; device: string }) {
   const loc = data.geoip.location;
   const geoCountry = countryName(loc);
   const geoCity = cityName(loc);
@@ -302,6 +356,116 @@ function LookupCard({ data }: { data: IsdbLookupResponse }) {
   const geoPostal = loc?.postal?.code ?? null;
 
   const services = data.matches.services;
+
+  const [expandedServices, setExpandedServices] = useState<
+    Map<number, ServiceDetailState>
+  >(new Map());
+
+  const handleToggleService = useCallback(
+    async (service: IsdbServiceMatch) => {
+      const sid = service.id;
+      let wasExpanded = false;
+      setExpandedServices((prev) => {
+        if (prev.has(sid)) {
+          wasExpanded = true;
+          const next = new Map(prev);
+          next.delete(sid);
+          return next;
+        }
+        const next = new Map(prev);
+        next.set(sid, {
+          total: null,
+          entries: [],
+          loading: true,
+          error: null,
+          loadedCount: 0,
+        });
+        return next;
+      });
+      if (wasExpanded) return;
+      try {
+        const [summary, firstPage] = await Promise.all([
+          fetchIsdbServiceDetails(device, sid, { summaryOnly: true }),
+          fetchIsdbServiceDetails(device, sid, { start: 0, count: 1000 }),
+        ]);
+        setExpandedServices((prev) => {
+          const next = new Map(prev);
+          next.set(sid, {
+            total: summary.total ?? firstPage.entries?.length ?? 0,
+            entries: firstPage.entries ?? [],
+            loading: false,
+            error: null,
+            loadedCount: firstPage.entries?.length ?? 0,
+          });
+          return next;
+        });
+      } catch (err) {
+        setExpandedServices((prev) => {
+          const next = new Map(prev);
+          next.set(sid, {
+            total: null,
+            entries: [],
+            loading: false,
+            error:
+              err instanceof Error ? err.message : "Failed to load details",
+            loadedCount: 0,
+          });
+          return next;
+        });
+      }
+    },
+    [device],
+  );
+
+  const handleLoadMore = useCallback(
+    async (serviceId: number) => {
+      let startOffset = 0;
+      let found = false;
+      setExpandedServices((prev) => {
+        const current = prev.get(serviceId);
+        if (!current) return prev;
+        found = true;
+        startOffset = current.loadedCount;
+        const next = new Map(prev);
+        next.set(serviceId, { ...current, loading: true });
+        return next;
+      });
+      if (!found) return;
+      try {
+        const page = await fetchIsdbServiceDetails(device, serviceId, {
+          start: startOffset,
+          count: 1000,
+        });
+        setExpandedServices((prev) => {
+          const existing = prev.get(serviceId);
+          if (!existing) return prev;
+          const newEntries = [...existing.entries, ...(page.entries ?? [])];
+          const next = new Map(prev);
+          next.set(serviceId, {
+            ...existing,
+            entries: newEntries,
+            loading: false,
+            loadedCount: newEntries.length,
+          });
+          return next;
+        });
+      } catch (err) {
+        setExpandedServices((prev) => {
+          const existing = prev.get(serviceId);
+          if (!existing) return prev;
+          const next = new Map(prev);
+          next.set(serviceId, {
+            ...existing,
+            loading: false,
+            error:
+              err instanceof Error ? err.message : "Failed to load more",
+          });
+          return next;
+        });
+      }
+    },
+    [device],
+  );
 
   return (
     <div className="rounded-2xl border border-slate-800 bg-slate-900/40">
@@ -446,7 +610,13 @@ function LookupCard({ data }: { data: IsdbLookupResponse }) {
               </thead>
               <tbody>
                 {services.map((s) => (
-                  <ServiceRow key={s.id} service={s} />
+                  <ServiceRow
+                    key={s.id}
+                    service={s}
+                    detail={expandedServices.get(s.id)}
+                    onToggle={() => handleToggleService(s)}
+                    onLoadMore={() => handleLoadMore(s.id)}
+                  />
                 ))}
               </tbody>
             </table>
@@ -478,54 +648,192 @@ function Th({ children, className = "" }: { children: ReactNode; className?: str
   );
 }
 
-function ServiceRow({ service }: { service: IsdbServiceMatch }) {
-  const hasBotnet = typeof service.botnet_id === "number" && service.botnet_id > 0;
+function ServiceEntryTable({
+  detail,
+  onLoadMore,
+}: {
+  detail: ServiceDetailState;
+  onLoadMore: () => void;
+}) {
+  const { total, entries, loading, error, loadedCount } = detail;
+  return (
+    <div className="border-t border-cyan-900/40 bg-slate-950/60 px-3 py-3">
+      <div className="mb-2 flex items-center justify-between text-[10px]">
+        <span className="font-semibold uppercase tracking-wider text-slate-500">
+          IP Range Entries
+        </span>
+        {total !== null && (
+          <span className="tabular-nums text-slate-500">
+            {loadedCount.toLocaleString()} of {total.toLocaleString()} loaded
+          </span>
+        )}
+      </div>
+      {error && (
+        <div className="mb-2 rounded border border-red-900/40 bg-red-950/30 px-3 py-2 text-[11px] text-red-300">
+          {error}
+        </div>
+      )}
+      {entries.length > 0 && (
+        <div className="overflow-x-auto rounded border border-slate-800/60">
+          <table className="w-full border-collapse text-[11px]">
+            <thead>
+              <tr className="bg-slate-900/80">
+                <th className="px-2 py-1.5 text-left text-[9px] font-semibold uppercase tracking-wider text-slate-500">
+                  Proto
+                </th>
+                <th className="px-2 py-1.5 text-left text-[9px] font-semibold uppercase tracking-wider text-slate-500">
+                  IP Range
+                </th>
+                <th className="px-2 py-1.5 text-left text-[9px] font-semibold uppercase tracking-wider text-slate-500">
+                  Ports
+                </th>
+                <th className="w-16 px-2 py-1.5 text-left text-[9px] font-semibold uppercase tracking-wider text-slate-500">
+                  Country
+                </th>
+                <th className="w-20 px-2 py-1.5 text-left text-[9px] font-semibold uppercase tracking-wider text-slate-500">
+                  Rep
+                </th>
+                <th className="w-20 px-2 py-1.5 text-left text-[9px] font-semibold uppercase tracking-wider text-slate-500">
+                  Pop
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {entries.map((entry, i) => (
+                <tr
+                  key={i}
+                  className="border-t border-slate-800/40 hover:bg-slate-900/30"
+                >
+                  <td className="px-2 py-1 font-mono text-slate-300">
+                    {PROTO_NAMES[entry.proto] ?? entry.proto}
+                  </td>
+                  <td className="px-2 py-1 font-mono text-slate-200">
+                    {formatIpRange(entry.ip_range)}
+                  </td>
+                  <td className="px-2 py-1 font-mono text-slate-300">
+                    {entry.port.map(formatPort).join(", ")}
+                  </td>
+                  <td className="px-2 py-1 tabular-nums text-slate-400">
+                    {entry.country_id}
+                  </td>
+                  <td className="px-2 py-1">
+                    <ReputationPips value={entry.reputation} />
+                  </td>
+                  <td className="px-2 py-1">
+                    <PopularityBar value={entry.popularity} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {total !== null && loadedCount < total && (
+        <button
+          type="button"
+          onClick={onLoadMore}
+          disabled={loading}
+          className="mt-2 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-1.5 text-[11px] text-slate-300 transition hover:border-cyan-700/60 hover:text-cyan-300 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {loading
+            ? "Loading\u2026"
+            : `Load next ${Math.min(1000, total - loadedCount).toLocaleString()} entries`}
+        </button>
+      )}
+      {loading && entries.length === 0 && (
+        <div className="flex items-center gap-2 py-4 text-xs text-slate-400">
+          <div className="h-3 w-3 animate-spin rounded-full border border-slate-700 border-t-cyan-400" />
+          Loading entries\u2026
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ServiceRow({
+  service,
+  detail,
+  onToggle,
+  onLoadMore,
+}: {
+  service: IsdbServiceMatch;
+  detail?: ServiceDetailState;
+  onToggle: () => void;
+  onLoadMore: () => void;
+}) {
+  const hasBotnet =
+    typeof service.botnet_id === "number" && service.botnet_id > 0;
   const hasBlocklist =
     Array.isArray(service.blocklist) && service.blocklist.length > 0;
+  const expanded = !!detail;
   return (
-    <tr className="border-t border-slate-800/60 hover:bg-slate-900/40">
-      <td className="px-3 py-2 align-top">
-        <div className="font-mono text-[12px] text-slate-200">
-          {service.name ?? `service #${service.id}`}
-        </div>
-        <div className="text-[10px] text-slate-600">
-          id {service.id}
-          {typeof service.num_matched_services === "number" && service.num_matched_services > 1 && (
-            <> · {service.num_matched_services} variants</>
-          )}
-        </div>
-      </td>
-      <td className="px-3 py-2 align-top">
-        <ReputationPips value={service.reputation} />
-      </td>
-      <td className="px-3 py-2 align-top">
-        <PopularityBar value={service.popularity} />
-      </td>
-      <td className="px-3 py-2 align-top text-slate-300">
-        {service.owner?.name ? (
-          <span className="font-mono text-[11px]">{service.owner.name}</span>
-        ) : (
-          <span className="text-slate-600">—</span>
-        )}
-      </td>
-      <td className="px-3 py-2 align-top">
-        <div className="flex flex-wrap gap-1">
-          {hasBotnet && (
-            <span className="inline-flex items-center rounded border border-red-800/60 bg-red-950/50 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-red-300">
-              botnet
+    <>
+      <tr
+        className={`border-t border-slate-800/60 cursor-pointer transition ${
+          expanded ? "bg-slate-900/60" : "hover:bg-slate-900/40"
+        }`}
+        onClick={onToggle}
+      >
+        <td className="px-3 py-2 align-top">
+          <div className="flex items-center gap-1.5">
+            <span
+              className={`text-[9px] text-slate-600 transition-transform ${expanded ? "rotate-90" : ""}`}
+            >
+              ▶
             </span>
+            <div>
+              <div className="font-mono text-[12px] text-slate-200">
+                {service.name ?? `service #${service.id}`}
+              </div>
+              <div className="text-[10px] text-slate-600">
+                id {service.id}
+                {typeof service.num_matched_services === "number" &&
+                  service.num_matched_services > 1 && (
+                    <> · {service.num_matched_services} variants</>
+                  )}
+              </div>
+            </div>
+          </div>
+        </td>
+        <td className="px-3 py-2 align-top">
+          <ReputationPips value={service.reputation} />
+        </td>
+        <td className="px-3 py-2 align-top">
+          <PopularityBar value={service.popularity} />
+        </td>
+        <td className="px-3 py-2 align-top text-slate-300">
+          {service.owner?.name ? (
+            <span className="font-mono text-[11px]">{service.owner.name}</span>
+          ) : (
+            <span className="text-slate-600">—</span>
           )}
-          {hasBlocklist && (
-            <span className="inline-flex items-center rounded border border-amber-800/60 bg-amber-950/50 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-amber-300">
-              blocklist
-            </span>
-          )}
-          {!hasBotnet && !hasBlocklist && (
-            <span className="text-[10px] text-slate-600">—</span>
-          )}
-        </div>
-      </td>
-    </tr>
+        </td>
+        <td className="px-3 py-2 align-top">
+          <div className="flex flex-wrap gap-1">
+            {hasBotnet && (
+              <span className="inline-flex items-center rounded border border-red-800/60 bg-red-950/50 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-red-300">
+                botnet
+              </span>
+            )}
+            {hasBlocklist && (
+              <span className="inline-flex items-center rounded border border-amber-800/60 bg-amber-950/50 px-1.5 py-0.5 text-[9px] font-semibold uppercase text-amber-300">
+                blocklist
+              </span>
+            )}
+            {!hasBotnet && !hasBlocklist && (
+              <span className="text-[10px] text-slate-600">—</span>
+            )}
+          </div>
+        </td>
+      </tr>
+      {expanded && (
+        <tr>
+          <td colSpan={5} className="p-0">
+            <ServiceEntryTable detail={detail!} onLoadMore={onLoadMore} />
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -557,7 +865,7 @@ export default function InternetServicesPage(): ReactNode {
   // successful response; we keep it on the page until explicitly
   // cleared so the results card doesn't flash on re-query.
   const [lookupInput, setLookupInput] = useState("");
-  const [lookup, setLookup] = useState<IsdbLookupResponse | null>(null);
+  const [batchResults, setBatchResults] = useState<BatchResult[]>([]);
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupError, setLookupError] = useState<string | null>(null);
 
@@ -635,24 +943,63 @@ export default function InternetServicesPage(): ReactNode {
     async (e?: React.FormEvent) => {
       if (e) e.preventDefault();
       if (!selectedDevice) return;
-      const target = lookupInput.trim();
-      if (!target) return;
+      const targets = parseTargets(lookupInput);
+      if (targets.length === 0) return;
+
+      const initial: BatchResult[] = targets.map((t) => ({
+        target: t,
+        status: "pending" as const,
+      }));
+      setBatchResults(initial);
       setLookupLoading(true);
       setLookupError(null);
-      try {
-        const data = await fetchIsdbIpLookup(selectedDevice, target);
-        setLookup(data);
-      } catch (err) {
-        setLookupError(err instanceof Error ? err.message : "Lookup failed");
-      } finally {
-        setLookupLoading(false);
+
+      let nextIdx = 0;
+      const concurrency = 5;
+
+      async function worker() {
+        while (nextIdx < targets.length) {
+          const idx = nextIdx++;
+          const target = targets[idx];
+          setBatchResults((prev) => {
+            const next = [...prev];
+            next[idx] = { ...next[idx], status: "loading" };
+            return next;
+          });
+          try {
+            const data = await fetchIsdbIpLookup(selectedDevice!, target);
+            setBatchResults((prev) => {
+              const next = [...prev];
+              next[idx] = { target, status: "done", data };
+              return next;
+            });
+          } catch (err) {
+            setBatchResults((prev) => {
+              const next = [...prev];
+              next[idx] = {
+                target,
+                status: "error",
+                error:
+                  err instanceof Error ? err.message : "Lookup failed",
+              };
+              return next;
+            });
+          }
+        }
       }
+
+      const workers = Array.from(
+        { length: Math.min(concurrency, targets.length) },
+        () => worker(),
+      );
+      await Promise.all(workers);
+      setLookupLoading(false);
     },
     [selectedDevice, lookupInput],
   );
 
   const handleClearLookup = useCallback(() => {
-    setLookup(null);
+    setBatchResults([]);
     setLookupError(null);
     setLookupInput("");
   }, []);
@@ -800,37 +1147,56 @@ export default function InternetServicesPage(): ReactNode {
           </div>
           <form
             onSubmit={handleLookup}
-            className="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-800 bg-slate-900/40 p-3"
+            className="rounded-2xl border border-slate-800 bg-slate-900/40 p-3 space-y-2"
           >
-            <input
-              type="text"
-              value={lookupInput}
-              onChange={(e) => setLookupInput(e.target.value)}
-              placeholder="IP address or FQDN (e.g. 1.1.1.1, google.com)"
-              className="w-96 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/60 focus:outline-none"
-              autoComplete="off"
-              spellCheck={false}
-            />
-            <button
-              type="submit"
-              disabled={!selectedDevice || !lookupInput.trim() || lookupLoading}
-              className="rounded-lg border border-cyan-700/60 bg-cyan-950/40 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-cyan-300 transition hover:border-cyan-500 hover:text-cyan-200 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-950 disabled:text-slate-600"
-            >
-              {lookupLoading ? "Looking up…" : "Lookup"}
-            </button>
-            {(lookup || lookupError) && (
-              <button
-                type="button"
-                onClick={handleClearLookup}
-                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-[11px] text-slate-500 transition hover:border-slate-600 hover:text-slate-300"
-              >
-                Clear
-              </button>
-            )}
+            <div className="flex flex-wrap items-start gap-2">
+              <textarea
+                value={lookupInput}
+                onChange={(e) => setLookupInput(e.target.value)}
+                placeholder={"IP addresses or FQDNs \u2014 one per line or comma-separated\ne.g. 1.1.1.1, google.com, 8.8.8.8"}
+                rows={3}
+                className="w-96 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/60 focus:outline-none resize-y"
+                autoComplete="off"
+                spellCheck={false}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    handleLookup();
+                  }
+                }}
+              />
+              <div className="flex flex-col gap-1.5">
+                <button
+                  type="submit"
+                  disabled={!selectedDevice || !lookupInput.trim() || lookupLoading}
+                  className="rounded-lg border border-cyan-700/60 bg-cyan-950/40 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-cyan-300 transition hover:border-cyan-500 hover:text-cyan-200 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-950 disabled:text-slate-600"
+                >
+                  {lookupLoading ? "Looking up\u2026" : "Lookup"}
+                </button>
+                {(batchResults.length > 0 || lookupError) && (
+                  <button
+                    type="button"
+                    onClick={handleClearLookup}
+                    className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-[11px] text-slate-500 transition hover:border-slate-600 hover:text-slate-300"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
             {!selectedDevice && (
               <span className="text-[11px] text-slate-600">
                 Select a FortiGate to enable lookups.
               </span>
+            )}
+            {lookupLoading && batchResults.length > 1 && (
+              <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                <div className="h-3 w-3 animate-spin rounded-full border border-slate-700 border-t-cyan-400" />
+                {batchResults.filter(
+                  (r) => r.status === "done" || r.status === "error",
+                ).length}{" "}
+                / {batchResults.length} completed
+              </div>
             )}
           </form>
           {lookupError && (
@@ -838,7 +1204,31 @@ export default function InternetServicesPage(): ReactNode {
               {lookupError}
             </div>
           )}
-          {lookup && <LookupCard data={lookup} />}
+          {batchResults.map((result, i) => (
+            <div key={`${result.target}-${i}`}>
+              {result.status === "loading" && (
+                <div className="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-4 text-xs text-slate-400">
+                  <div className="h-3 w-3 animate-spin rounded-full border border-slate-700 border-t-cyan-400" />
+                  Looking up{" "}
+                  <span className="font-mono text-slate-300">
+                    {result.target}
+                  </span>
+                  {"\u2026"}
+                </div>
+              )}
+              {result.status === "error" && (
+                <div className="rounded-xl border border-red-900/60 bg-red-950/40 px-4 py-3 text-sm text-red-200">
+                  <span className="font-mono text-red-300">
+                    {result.target}
+                  </span>{" "}
+                  {"\u2014"} {result.error}
+                </div>
+              )}
+              {result.status === "done" && result.data && (
+                <LookupCard data={result.data} device={selectedDevice!} />
+              )}
+            </div>
+          ))}
         </section>
 
         {/* FQDN catalog section header */}

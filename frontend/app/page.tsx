@@ -269,6 +269,18 @@ export default function Home() {
               >
                 Internet Services
               </button>
+              <button
+                onClick={() => router.push("/reference/local-web-categories")}
+                className="text-slate-500 hover:text-cyan-400 transition"
+              >
+                Local Web Cats
+              </button>
+              <button
+                onClick={() => router.push("/reference/web-rating-overrides")}
+                className="text-slate-500 hover:text-cyan-400 transition"
+              >
+                Web Overrides
+              </button>
             </nav>
             <div className="h-4 w-px bg-slate-800" />
             {activeInstance && (

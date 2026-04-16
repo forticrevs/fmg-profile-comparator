@@ -1,0 +1,168 @@
+"""Chat session manager — conversation state, context assembly, streaming.
+
+Each session is an in-memory conversation that tracks messages and the
+current page context. Sessions are ephemeral by default (cleared on
+logout / browser refresh); the frontend can explicitly save one to
+persist it across logins.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import time
+import uuid
+from pathlib import Path
+from typing import Any, AsyncGenerator
+
+from .base import LLMProvider
+from .types import ChatMessage, ChatSession
+
+logger = logging.getLogger(__name__)
+
+_HISTORY_DIR = Path(__file__).resolve().parents[3] / "chat_history"
+
+# In-memory session store — keyed by session ID.
+_sessions: dict[str, ChatSession] = {}
+
+# Default system prompt.  The page-context block is injected between
+# this preamble and the user's conversation.
+_SYSTEM_PREAMBLE = """\
+You are an expert Fortinet network security assistant embedded in an \
+operational dashboard. You have deep knowledge of FortiOS, FortiManager, \
+FortiAnalyzer, FortiGate, SD-WAN, ZTNA, IPS, DLP, web filtering, and \
+the full Fortinet Security Fabric.
+
+When the user asks a question, answer concisely and accurately. \
+Reference specific FortiOS CLI commands, FortiManager API paths, or \
+configuration steps when relevant. If you are unsure, say so rather \
+than guessing.
+"""
+
+
+def new_session(provider_id: str) -> ChatSession:
+    sid = uuid.uuid4().hex[:12]
+    session = ChatSession(
+        id=sid,
+        provider_id=provider_id,
+        messages=[],
+        created_at=time.time(),
+    )
+    _sessions[sid] = session
+    return session
+
+
+def get_session(session_id: str) -> ChatSession | None:
+    return _sessions.get(session_id)
+
+
+def delete_session(session_id: str) -> None:
+    _sessions.pop(session_id, None)
+
+
+def _build_messages(
+    session: ChatSession,
+    page_context: dict[str, Any] | None = None,
+    system_prompt: str | None = None,
+    rag_context: str | None = None,
+) -> list[dict[str, str]]:
+    """Assemble the full message list sent to the LLM.
+
+    Order: system preamble → RAG context → page context → conversation.
+    """
+    parts = [system_prompt or _SYSTEM_PREAMBLE]
+
+    if rag_context:
+        parts.append(
+            "\n\n--- Relevant knowledge base excerpts ---\n" + rag_context
+        )
+
+    if page_context:
+        ctx_json = json.dumps(page_context, indent=2, default=str)
+        parts.append(
+            "\n\n--- Current UI context (what the user is looking at) ---\n"
+            + ctx_json
+        )
+
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": "\n".join(parts)},
+    ]
+    for m in session.messages:
+        messages.append({"role": m.role, "content": m.content})
+    return messages
+
+
+async def send_message(
+    session: ChatSession,
+    user_text: str,
+    provider: LLMProvider,
+    *,
+    page_context: dict[str, Any] | None = None,
+    system_prompt: str | None = None,
+    rag_context: str | None = None,
+) -> AsyncGenerator[str, None]:
+    """Append the user message, stream the assistant reply, and persist both.
+
+    Yields content tokens as they arrive.  The full assistant message
+    is appended to the session only after the stream completes so that
+    interrupted streams don't leave partial messages in history.
+    """
+    session.messages.append(ChatMessage(role="user", content=user_text))
+
+    messages = _build_messages(
+        session,
+        page_context=page_context,
+        system_prompt=system_prompt,
+        rag_context=rag_context,
+    )
+
+    full_reply: list[str] = []
+    async for token in provider.stream(messages):
+        full_reply.append(token)
+        yield token
+
+    assistant_text = "".join(full_reply)
+    session.messages.append(ChatMessage(role="assistant", content=assistant_text))
+
+
+# ---- Persistence (explicit save / load) -----------------------------
+
+def save_session(session: ChatSession, username: str) -> Path:
+    _HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    fname = f"{username}_{session.id}_{int(session.created_at)}.json"
+    path = _HISTORY_DIR / fname
+    path.write_text(session.model_dump_json(indent=2))
+    return path
+
+
+def list_saved_sessions(username: str) -> list[dict[str, Any]]:
+    if not _HISTORY_DIR.exists():
+        return []
+    out: list[dict[str, Any]] = []
+    for p in sorted(_HISTORY_DIR.glob(f"{username}_*.json"), reverse=True):
+        try:
+            data = json.loads(p.read_text())
+            out.append({
+                "id": data["id"],
+                "provider_id": data.get("provider_id", ""),
+                "message_count": len(data.get("messages", [])),
+                "created_at": data.get("created_at", 0),
+                "file": p.name,
+            })
+        except Exception:
+            continue
+    return out
+
+
+def load_saved_session(username: str, session_id: str) -> ChatSession | None:
+    if not _HISTORY_DIR.exists():
+        return None
+    for p in _HISTORY_DIR.glob(f"{username}_{session_id}_*.json"):
+        try:
+            data = json.loads(p.read_text())
+            session = ChatSession(**data)
+            _sessions[session.id] = session
+            return session
+        except Exception:
+            continue
+    return None

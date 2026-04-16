@@ -43,6 +43,7 @@ backend/fmg_instances.json
 backend/user_store.json
 backend/pin_store.json
 backend/user_data/
+backend/ai_providers.json
 
 # Local screenshots / scratch images
 image.png

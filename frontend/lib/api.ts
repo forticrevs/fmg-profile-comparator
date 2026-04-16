@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 // ---------------------------------------------------------------------------
 // Auth helpers
@@ -15,7 +15,7 @@ function authHeaders(): Record<string, string> {
   return { Authorization: `Bearer ${token}` };
 }
 
-async function authFetch(url: string, init?: RequestInit): Promise<Response> {
+export async function authFetch(url: string, init?: RequestInit): Promise<Response> {
   const headers = { ...authHeaders(), ...init?.headers };
   const res = await fetch(url, { ...init, headers });
   if (res.status === 401) {
@@ -336,6 +336,18 @@ export async function fetchDlpDataTypes(): Promise<ReferenceListResponse> {
   return res.json();
 }
 
+export async function fetchLocalWebCategories(): Promise<ReferenceListResponse> {
+  const res = await authFetch(`${API_BASE}/api/reference/local-web-categories`);
+  if (!res.ok) throw new Error("Failed to fetch local web categories");
+  return res.json();
+}
+
+export async function fetchWebRatingOverrides(): Promise<ReferenceListResponse> {
+  const res = await authFetch(`${API_BASE}/api/reference/web-rating-overrides`);
+  if (!res.ok) throw new Error("Failed to fetch web rating overrides");
+  return res.json();
+}
+
 // ---------------------------------------------------------------------------
 // FortiGuard encyclopedia — hover tooltip lookups
 //
@@ -569,6 +581,65 @@ export async function fetchIsdbIpLookup(
   });
   if (!res.ok) {
     let detail = "ISDB lookup failed";
+    try {
+      const body = await res.json();
+      if (typeof body?.detail === "string") detail = body.detail;
+    } catch {
+      /* keep generic */
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+// ----- Service details (per-service IP range drill-down) -----
+
+export interface IsdbServiceEntry {
+  proto: number;
+  ip_range: { start_ip: string; end_ip: string };
+  port: { start_port: number; end_port: number }[];
+  country_id: number;
+  region_id?: number;
+  city_id?: number;
+  popularity?: number;
+  reputation?: number;
+  botnet_id?: number;
+}
+
+export interface IsdbServiceDetailsResponse {
+  id: number;
+  name: string;
+  total?: number;
+  entries?: IsdbServiceEntry[];
+  disable_entries?: unknown[];
+  start?: number;
+  count?: number;
+}
+
+export async function fetchIsdbServiceDetails(
+  device: string,
+  serviceId: number,
+  options?: {
+    summaryOnly?: boolean;
+    start?: number;
+    count?: number;
+    vdom?: string;
+  },
+): Promise<IsdbServiceDetailsResponse> {
+  const res = await authFetch(`${API_BASE}/api/tools/isdb/service-details`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      device,
+      service_id: serviceId,
+      vdom: options?.vdom ?? "root",
+      summary_only: options?.summaryOnly ?? false,
+      start: options?.start ?? 0,
+      count: options?.count ?? 1000,
+    }),
+  });
+  if (!res.ok) {
+    let detail = "Service details lookup failed";
     try {
       const body = await res.json();
       if (typeof body?.detail === "string") detail = body.detail;
@@ -972,4 +1043,89 @@ export async function fetchJobArtifactText(
   );
   if (!res.ok) throw new Error("Failed to fetch artifact");
   return res.text();
+}
+
+// ---------------------------------------------------------------------------
+// AI Provider management
+// ---------------------------------------------------------------------------
+
+export interface AiProviderInfo {
+  id: string;
+  name: string;
+  kind: string;
+  base_url: string;
+  model: string;
+  temperature: number;
+  max_tokens: number;
+  is_embedding: boolean;
+  enabled: boolean;
+  has_api_key: boolean;
+}
+
+export async function fetchAiProviders(): Promise<AiProviderInfo[]> {
+  const res = await authFetch(`${API_BASE}/api/ai/providers`);
+  if (!res.ok) throw new Error("Failed to fetch AI providers");
+  const data = await res.json();
+  return data.providers ?? [];
+}
+
+export async function upsertAiProvider(
+  config: Record<string, unknown>,
+): Promise<void> {
+  const res = await authFetch(`${API_BASE}/api/ai/providers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    let detail = "Failed to save provider";
+    try {
+      const b = await res.json();
+      if (typeof b?.detail === "string") detail = b.detail;
+    } catch {}
+    throw new Error(detail);
+  }
+}
+
+export async function deleteAiProvider(id: string): Promise<void> {
+  const res = await authFetch(`${API_BASE}/api/ai/providers/${id}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error("Failed to delete provider");
+}
+
+export async function testAiProvider(
+  id: string,
+): Promise<{ ok: boolean; reply?: string; error?: string }> {
+  const res = await authFetch(
+    `${API_BASE}/api/ai/providers/${id}/test`,
+    { method: "POST" },
+  );
+  return res.json();
+}
+
+export async function fetchProviderModels(
+  kind: string,
+  baseUrl: string,
+  apiKey: string = "",
+): Promise<{ models: string[]; error?: string }> {
+  const res = await authFetch(`${API_BASE}/api/ai/fetch-models`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind, base_url: baseUrl, api_key: apiKey }),
+  });
+  if (!res.ok) return { models: [], error: "Request failed" };
+  return res.json();
+}
+
+export async function fetchOllamaModels(
+  baseUrl?: string,
+): Promise<string[]> {
+  const qs = baseUrl
+    ? `?base_url=${encodeURIComponent(baseUrl)}`
+    : "";
+  const res = await authFetch(`${API_BASE}/api/ai/ollama-models${qs}`);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.models ?? [];
 }

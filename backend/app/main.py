@@ -17,6 +17,7 @@ from app.routers import (
     tools_policy_shadow,
     tools_isdb,
     schemas,
+    chat,
 )
 
 
@@ -52,6 +53,7 @@ app.include_router(tools_policy_viewer.router)
 app.include_router(tools_policy_shadow.router)
 app.include_router(tools_isdb.router)
 app.include_router(schemas.router)
+app.include_router(chat.router)
 
 
 @app.get("/api/health")
