@@ -4,8 +4,9 @@ Inspection and migration workbench for FortiManager deployments. Started as a
 side-by-side drift inspector for cloned security profiles; now also hosts
 reference catalogs, signature encyclopedia lookups, a dense policy viewer
 with live hit counts, a policy-shadow analyzer, an Internet Service Database
-browser, a multi-file config diff utility, and a Palo Alto →  FortiGate
-migration extractor.
+browser, optional AI assistant with provider-managed LLM/RAG context, a
+multi-file config diff utility, and a Palo Alto →  FortiGate migration
+extractor.
 
 ![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js)
 ![React 19](https://img.shields.io/badge/React-19-61dafb?logo=react)
@@ -73,7 +74,9 @@ Searchable explorers for every FMG reference data source the tool understands.
 | DLP Sensors | `/pm/config/adom/{adom}/obj/dlp/sensor` | Full sensor catalog with nested entry tables |
 | DLP Dictionaries | `/pm/config/adom/{adom}/obj/dlp/dictionary` | Pattern entries expanded |
 | DLP Data Types | `/pm/config/adom/{adom}/obj/dlp/data-type` | Built-in types |
-| Internet Services | FortiGuard ISDB via FMG `/sys/proxy/json` → FortiGate | FQDN catalog + IP lookup |
+| Local Web Categories | `/pm/config/adom/{adom}/obj/webfilter/ftgd-local-cat` | Operator-defined FortiGuard category buckets with audit metadata |
+| Web Rating Overrides | `/pm/config/adom/{adom}/obj/webfilter/ftgd-local-rating` | URL override catalog with resolved category names |
+| Internet Services | FortiGuard ISDB via FMG `/sys/proxy/json` → FortiGate | FQDN catalog, full service directory, IP/FQDN lookup |
 
 #### Signature encyclopedia hover (IPS + Application)
 
@@ -94,6 +97,9 @@ through FMG's `/sys/proxy/json` to a user-selected managed FortiGate.
 - **FQDN catalog** — browse FortiGuard's SaaS FQDN groups as a searchable
   table (vendor, service, FQDN count, chip-rendered FQDN list). Cached 30
   minutes per `(fmg, device, vdom)` tuple.
+- **Service catalog** — browse every FortiGuard Internet Service name exposed
+  by the selected FortiGate. Rows load detailed IP ranges, ports, reputation,
+  and disabled-entry data on demand through the same FMG proxy path.
 - **IP lookup** — enter an IP (or FQDN, auto-resolved via DNS) and
   parallel-fire `reverse-ip-lookup`, `geoip-query`, `internet-service-match`,
   and `internet-service-reputation`. Match + reputation are merged by service
@@ -102,6 +108,32 @@ through FMG's `/sys/proxy/json` to a user-selected managed FortiGate.
   table with reputation pips, popularity bars, and botnet/blocklist flags.
   Partial failures (e.g. no reverse DNS on a private IP) are reported
   per-section so the rest of the card still renders.
+
+### Optional AI assistant, providers, and RAG
+
+The floating AI assistant is an add-on workflow. Profile comparison,
+reference browsing, ISDB lookup, and the migration tools all work without any
+AI provider, Ollama process, Qdrant database, or RAG corpus.
+
+- **Provider-managed chat.** Settings can store multiple LLM providers and the
+  chat widget lets the user choose one per conversation. API keys are encrypted
+  at rest in `backend/ai_providers.json` with the same Fernet key used for FMG
+  instances.
+- **Provider coverage.** Built-in UI presets cover local Ollama, OpenAI,
+  Anthropic, Google Gemini, OpenRouter, FortiAIGate, vLLM, and any custom
+  OpenAI-compatible endpoint that speaks `/v1/chat/completions`.
+- **Context-aware prompts.** The frontend sends compact current-page context
+  automatically, and high-value rows/cards expose an "add to chat context"
+  action for one-shot attachments from profile comparisons, reference
+  catalogs, signatures, and ISDB results.
+- **Best-effort RAG.** When enabled and reachable, `/api/chat/message` embeds
+  the user turn plus compact UI context, queries Qdrant, and injects Fortinet
+  documentation excerpts ahead of the UI context. If Qdrant or the embedding
+  server is down, the warning is logged and chat continues without RAG.
+- **Default retrieval stack.** The app expects an already-populated Qdrant
+  collection named `fortinet_docs`, built with `qwen3-embedding:8b`
+  embeddings (`4096` dimensions) unless the `RAG_*` environment variables
+  override those defaults.
 
 ### Tools
 
@@ -138,9 +170,9 @@ per-user job directory, and everything is bundled into a
 ┌─ Next.js 16 / React 19 / Tailwind 4 ───────────────────────┐
 │ app/                                                       │
 │   page.tsx                   dashboard + profile picker    │
-│   reference/                 6 catalog explorers           │
+│   reference/                 8 catalog explorers           │
 │   tools/                     4 utility surfaces            │
-│   settings/                  multi-FMG instance CRUD       │
+│   settings/                  multi-FMG + AI provider CRUD  │
 │   login/                     auth gateway                  │
 │ components/                                                │
 │   ComparisonTable            flat field matrix + baseline  │
@@ -150,6 +182,8 @@ per-user job directory, and everything is bundled into a
 │   CommentCell                click-to-expand diff preview  │
 │   ReferenceExplorer          catalog table primitive       │
 │   SignatureTooltip           portal hover encyclopedia     │
+│   ChatWidget, ChatContext    optional contextual AI chat   │
+│   AddToChatContextButton     one-shot chat attachments     │
 │   DataGrid                   CSS-grid table primitive      │
 │   FieldVisibilityMenu        schema-backed column hider    │
 │   ActionBadge                shared verdict pills          │
@@ -162,15 +196,16 @@ per-user job directory, and everything is bundled into a
 │ routers/                                                   │
 │   auth                  login/register/connect-fmg         │
 │   profiles              list/detail/compare/pins           │
-│   reference             signatures + DLP + encyclopedia    │
+│   reference             catalogs + encyclopedia            │
 │   schemas               FMG syntax schema access           │
 │   settings              multi-FMG instance CRUD            │
+│   chat                  chat stream + AI provider API      │
 │   jobs                  ARQ job status + artifact download │
 │   tools_pan             PAN XML extraction                 │
 │   tools_diff            multi-file text diff               │
 │   tools_policy_viewer   firewall policy browser            │
 │   tools_policy_shadow   policy shadow analyzer runner      │
-│   tools_isdb            ISDB FQDN + IP lookup proxy        │
+│   tools_isdb            ISDB FQDN/catalog/IP proxy         │
 │ services/                                                  │
 │   fmg_client            JSON-RPC + undocumented CGI client │
 │   fmg_registry          multi-instance (Fernet-encrypted)  │
@@ -183,6 +218,7 @@ per-user job directory, and everything is bundled into a
 │   diff_engine           unified diff generator             │
 │   file_security         upload allow-list + safe parse     │
 │   pan_parsers/          self-registering XML → CSV/XLSX    │
+│   ai/                   providers + chat + RAG retrieval   │
 │   pin_store             per-type pin persistence           │
 │   user_store            bcrypt local user store            │
 │   auth                  JWT issuance + per-session FMGs    │
@@ -201,6 +237,12 @@ per-user job directory, and everything is bundled into a
                        │  /sys/proxy/json
                        ▼
              Managed FortiGate(s)
+
+┌─ Optional AI / RAG services ───────────────────────────────┐
+│  LLM provider: Ollama, OpenAI-compatible, Anthropic, Gemini │
+│  Ollama embeddings: qwen3-embedding:8b via /api/embed      │
+│  Qdrant: fortinet_docs collection with 4096-d vectors      │
+└────────────────────────────────────────────────────────────┘
 
 ┌─ Redis + ARQ worker ───────────────────────────────────────┐
 │  redis://localhost:6379   (podman container)               │
@@ -225,6 +267,9 @@ per-user job directory, and everything is bundled into a
   order-independent, so DLP proto lists stay coherent.
 - **Resolved values are `{raw, display}` dicts.** Any new cell renderer must
   check `isResolved(v)` before stringifying, or it'll show `[object Object]`.
+- **AI and RAG are optional.** `/api/chat/message` can enrich prompts with
+  page context and Fortinet-doc retrieval, but the comparator and tools do not
+  depend on an LLM, embedding model, or Qdrant.
 
 ---
 
@@ -338,6 +383,22 @@ FMG instance bound to the session via `POST /api/auth/connect-fmg`.
 | `GET` | `/api/reference/dlp-sensors` | DLP sensor catalog |
 | `GET` | `/api/reference/dlp-dictionaries` | DLP dictionary catalog |
 | `GET` | `/api/reference/dlp-data-types` | DLP data-type catalog |
+| `GET` | `/api/reference/local-web-categories` | Custom web category catalog |
+| `GET` | `/api/reference/web-rating-overrides` | FortiGuard URL override catalog |
+
+### Chat & AI providers (optional)
+| Method | Path | Purpose |
+|--------|------|---------|
+| `POST` | `/api/chat/message` | SSE chat stream with page context and best-effort RAG |
+| `POST` | `/api/chat/new` | Start an in-memory chat session |
+| `POST` | `/api/chat/save` | Persist the current chat session |
+| `GET` | `/api/chat/history` | List saved sessions for the user |
+| `GET` | `/api/chat/history/{session_id}` | Load one saved session |
+| `GET` / `POST` | `/api/ai/providers` | List or upsert provider definitions |
+| `DELETE` | `/api/ai/providers/{provider_id}` | Delete a provider |
+| `POST` | `/api/ai/providers/{provider_id}/test` | Smoke-test one provider |
+| `POST` | `/api/ai/fetch-models` | Discover models for Ollama, OpenAI-compatible, or Gemini |
+| `GET` | `/api/ai/ollama-models` | Legacy Ollama model discovery helper |
 
 ### Tools
 | Method | Path | Purpose |
@@ -355,6 +416,8 @@ FMG instance bound to the session via `POST /api/auth/connect-fmg`.
 | `POST` | `/api/tools/policy-shadow/run` | Enqueue shadow analysis job |
 | `GET` | `/api/tools/isdb/devices` | Managed FortiGates available for proxy |
 | `GET` | `/api/tools/isdb/fqdn` | ISDB FQDN catalog (via FOS proxy) |
+| `GET` | `/api/tools/isdb/catalog` | ISDB service catalog (via FOS proxy) |
+| `POST` | `/api/tools/isdb/service-details` | On-demand ISDB service details |
 | `POST` | `/api/tools/isdb/lookup` | IP / FQDN enrichment (via FOS proxy) |
 | `GET` | `/api/jobs/{job_id}` | Job status + result |
 | `GET` | `/api/jobs/{job_id}/artifact/{filename}` | Per-job artifact download |
@@ -363,12 +426,15 @@ FMG instance bound to the session via `POST /api/auth/connect-fmg`.
 
 ## Persistence
 
-Backend state is plain JSON files next to the backend (all gitignored):
+Backend state lives next to the backend (all gitignored):
 
 - `backend/user_store.json` — bcrypt user records
 - `backend/pin_store.json` — `{ profile_type: [field_path, ...] }`
 - `backend/fmg_instances.json` — FMG credentials encrypted with Fernet
+- `backend/ai_providers.json` — optional AI provider definitions; API keys
+  are encrypted with the same Fernet key
 - `backend/.fmg_key` — the Fernet key (losing it bricks every stored instance)
+- `backend/chat_history/<username>/` — explicitly saved AI chat sessions
 - `backend/user_data/<username>/jobs/<job_id>/` — per-user tool job outputs
   (parser CSVs/XLSX, bundled zip). Uploads land in
   `backend/user_data/<username>/uploads/` and are deleted as soon as the job
@@ -383,9 +449,12 @@ Frontend state lives in `localStorage`:
 | `fieldvis:scc:<collectionKey>` | Hidden columns per structured collection |
 | `fieldvis:ref:<kind>` | Hidden columns per reference page |
 | `colorder:ref:<kind>` | Column order per reference page |
+| `sort:ref:<kind>` | Sort column/direction per reference page |
 | `refcols-init:ref:<kind>` | Default-columns migration sentinel (version-gated) |
 | `baseline:<type>` | Persisted comparison baseline per profile type |
 | `isdb:selected-device` | Last-used FortiGate for ISDB proxy |
+| `chat:provider` | Last-selected AI provider |
+| `chat:width`, `chat:height` | Resized chat widget dimensions |
 
 ---
 
@@ -419,6 +488,73 @@ Open <http://localhost:3002>, register the first user, then add an FMG
 instance under **Settings** and connect to it. Profile comparison works
 immediately; ISDB lookups additionally require at least one FMG-managed
 FortiGate.
+
+### Optional: AI provider setup
+
+The app only needs an AI provider when you want to use the floating chat
+assistant. Configure providers in **Settings → AI Providers**:
+
+1. Pick a provider preset: **Ollama (Local)**, **OpenAI**, **Anthropic**,
+   **Google Gemini**, **OpenRouter**, **FortiAIGate**, **vLLM**, or
+   **Custom (OpenAI-compatible)**.
+2. Enter the base URL, API key when required, model name, temperature, and
+   token cap. Provider API keys are encrypted in `backend/ai_providers.json`.
+3. Use **Fetch models** when the endpoint supports discovery, then **Test**
+   before selecting the provider for chat.
+
+For custom/self-hosted endpoints, use the OpenAI-compatible shape. The base URL
+should be the API root, for example `http://127.0.0.1:8080/v1` or
+`http://127.0.0.1:8000/v1`; the backend appends `/chat/completions` for chat
+and `/models` for discovery.
+
+### Optional: RAG pipeline setup
+
+RAG is only used to enrich AI chat with Fortinet documentation excerpts. The
+web app does not ingest documents itself; it expects a Qdrant collection that
+was already populated by an external ingestion job using the same embedding
+model and vector size.
+
+Default retrieval settings:
+
+```bash
+export RAG_ENABLED=true
+export RAG_QDRANT_URL=http://127.0.0.1:6333
+export RAG_OLLAMA_URL=http://127.0.0.1:11434
+export RAG_COLLECTION=fortinet_docs
+export RAG_EMBEDDING_MODEL=qwen3-embedding:8b
+export RAG_EMBEDDING_DIM=4096
+export RAG_TOP_K=5
+export RAG_MAX_CONTEXT_CHARS=7000
+```
+
+Minimal local serving stack:
+
+```bash
+ollama pull qwen3-embedding:8b
+ollama serve
+
+podman run -d --name qdrant \
+  -p 6333:6333 \
+  -v qdrant-storage:/qdrant/storage \
+  qdrant/qdrant
+```
+
+Then run the ingestion job for your documentation corpus so Qdrant contains a
+`fortinet_docs` collection with `4096`-dimension vectors from
+`qwen3-embedding:8b`. If you use the companion Fortinet RAG pipeline, configure
+that runner to the same `QDRANT_URL`, collection, embedding model, and
+dimension before ingesting.
+
+Quick sanity checks:
+
+```bash
+curl http://127.0.0.1:11434/api/tags
+curl http://127.0.0.1:6333/collections/fortinet_docs
+```
+
+If `RAG_ENABLED=false`, or if Ollama/Qdrant is unreachable, chat still works
+with the configured LLM provider. The rest of the application does not depend
+on the AI provider or RAG stack at all.
 
 ---
 
