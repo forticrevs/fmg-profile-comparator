@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import ProfileDashboard from "@/components/ProfileDashboard";
 import ProfilePicker from "@/components/ProfilePicker";
 import ComparisonTable from "@/components/ComparisonTable";
 import { useAuth } from "@/components/AuthGuard";
+import { useChatContext } from "@/components/ChatContext";
 import {
   fetchProfileTypes,
   fetchProfiles,
@@ -38,8 +39,45 @@ function saveBaseline(type: string, name: string | null): void {
   }
 }
 
+function compactContextValue(value: unknown): unknown {
+  if (value === "__MISSING__") return "missing";
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string") {
+    return value.length > 400 ? `${value.slice(0, 400)}...` : value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (Array.isArray(value)) {
+    if (
+      value.every(
+        (item) =>
+          item === null ||
+          ["string", "number", "boolean"].includes(typeof item),
+      )
+    ) {
+      return value.length > 20
+        ? [...value.slice(0, 20), `... ${value.length - 20} more`]
+        : value;
+    }
+    return {
+      type: "array",
+      length: value.length,
+      sample: value.slice(0, 5).map(compactContextValue),
+    };
+  }
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    if ("raw" in obj && "display" in obj) {
+      return { raw: obj.raw, display: obj.display };
+    }
+    const json = JSON.stringify(obj);
+    return json.length > 400 ? `${json.slice(0, 400)}...` : json;
+  }
+  return String(value);
+}
+
 export default function Home() {
   const { username, activeInstance, needsSetup, logout: doLogout } = useAuth();
+  const { setPageContext, clearPageContext } = useChatContext();
   const router = useRouter();
   const [view, setView] = useState<View>("dashboard");
   const [types, setTypes] = useState<ProfileType[]>([]);
@@ -60,6 +98,7 @@ export default function Home() {
     baseline: string | null;
   } | null>(null);
   const [pins, setPins] = useState<string[]>([]);
+  const selectedProfiles = useMemo(() => Array.from(selected), [selected]);
 
   // Persisted baseline setter — writes through to localStorage scoped by
   // profile type. The user-facing requirement is "remember my baseline
@@ -163,6 +202,96 @@ export default function Home() {
       setBaselineState(null);
     }
   };
+
+  useEffect(() => {
+    return () => clearPageContext("profile-comparator");
+  }, [clearPageContext]);
+
+  useEffect(() => {
+    if (view === "comparison" && result) {
+      const driftFields = result.fields.filter((field) => !field.in_sync);
+      const pinSet = new Set(pins);
+      setPageContext({
+        id: "profile-comparator",
+        kind: "profile_comparison",
+        label: `Comparing ${result.profileNames.length} ${result.profileType} profiles`,
+        data: {
+          active_fmg: activeInstance?.name ?? null,
+          profile_type: result.profileType,
+          profile_names: result.profileNames,
+          baseline: result.baseline,
+          field_count: result.fields.length,
+          sync_field_count: result.fields.length - driftFields.length,
+          drift_field_count: driftFields.length,
+          collection_keys: result.collectionKeys,
+          pinned_count: pins.length,
+          pinned_drift_fields: pins.filter((fieldPath) =>
+            driftFields.some((field) => field.field_path === fieldPath),
+          ),
+          top_drift_fields: driftFields.slice(0, 20).map((field) => ({
+            field_path: field.field_path,
+            label: field.label,
+            pinned: pinSet.has(field.field_path),
+            values: Object.fromEntries(
+              result.profileNames.map((name) => [
+                name,
+                compactContextValue(field.values[name]),
+              ]),
+            ),
+          })),
+        },
+      });
+      return;
+    }
+
+    if (view === "picker" && selectedType) {
+      setPageContext({
+        id: "profile-comparator",
+        kind: "profile_picker",
+        label: `${selectedType.label} profile picker`,
+        data: {
+          active_fmg: activeInstance?.name ?? null,
+          profile_type: selectedType.id,
+          profile_type_label: selectedType.label,
+          profile_count: profiles.length,
+          selected_count: selectedProfiles.length,
+          selected_profiles: selectedProfiles.slice(0, 30),
+          baseline,
+          loading,
+          error,
+        },
+      });
+      return;
+    }
+
+    setPageContext({
+      id: "profile-comparator",
+      kind: "profile_dashboard",
+      label: "Profile Comparator dashboard",
+      data: {
+        active_fmg: activeInstance?.name ?? null,
+        needs_setup: needsSetup,
+        available_profile_types: types.map((type) => ({
+          id: type.id,
+          label: type.label,
+        })),
+      },
+    });
+  }, [
+    activeInstance?.name,
+    baseline,
+    error,
+    loading,
+    needsSetup,
+    pins,
+    profiles.length,
+    result,
+    selectedProfiles,
+    selectedType,
+    setPageContext,
+    types,
+    view,
+  ]);
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">

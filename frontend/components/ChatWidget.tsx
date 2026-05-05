@@ -19,6 +19,11 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { authFetch, API_BASE } from "@/lib/api";
+import {
+  useChatContext,
+  type ChatContextItem,
+  type ChatPageContext,
+} from "@/components/ChatContext";
 
 /* ------------------------------------------------------------------ */
 /* Types                                                               */
@@ -291,6 +296,21 @@ export default function ChatWidget() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // Current view context plus optional attached items from page controls.
+  const {
+    pageContext,
+    items: contextItems,
+    removeItem,
+    clearAll,
+    onItemAdded,
+  } = useChatContext();
+
+  // Auto-open when an item is attached while the panel is minimized
+  useEffect(() => {
+    const off = onItemAdded(() => setOpen(true));
+    return off;
+  }, [onItemAdded]);
+
   // Load persisted size on mount
   useEffect(() => {
     const { w, h } = loadSize();
@@ -381,12 +401,31 @@ export default function ChatWidget() {
     setStreaming(true);
     setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
+    let sentAttachedIds: string[] = [];
     try {
+      const attachedItems = contextItems.map((i) => ({
+        kind: i.kind,
+        label: i.label,
+        data: i.data,
+      }));
+      sentAttachedIds = contextItems.map((i) => i.id);
+      const pageContextPayload: Record<string, unknown> = {};
+      if (pageContext) {
+        pageContextPayload.page = {
+          kind: pageContext.kind,
+          label: pageContext.label,
+          data: pageContext.data,
+        };
+      }
+      if (attachedItems.length > 0) {
+        pageContextPayload.items = attachedItems;
+      }
+
       for await (const event of streamChat(
         selectedProvider,
         text,
         sessionId,
-        {},
+        pageContextPayload,
       )) {
         if (event.type === "session") {
           setSessionId(event.id);
@@ -410,8 +449,19 @@ export default function ChatWidget() {
       setError(err instanceof Error ? err.message : "Stream failed");
     } finally {
       setStreaming(false);
+      for (const id of sentAttachedIds) {
+        removeItem(id);
+      }
     }
-  }, [input, selectedProvider, sessionId, streaming]);
+  }, [
+    input,
+    selectedProvider,
+    sessionId,
+    streaming,
+    contextItems,
+    pageContext,
+    removeItem,
+  ]);
 
   const handleNewChat = useCallback(() => {
     setMessages([]);
@@ -557,6 +607,16 @@ export default function ChatWidget() {
         </div>
       )}
 
+      {/* Context summary */}
+      {providers.length > 0 && (pageContext || contextItems.length > 0) && (
+        <ContextPanel
+          pageContext={pageContext}
+          items={contextItems}
+          onRemove={removeItem}
+          onClearAll={clearAll}
+        />
+      )}
+
       {/* Input */}
       {providers.length > 0 && (
         <div className="shrink-0 border-t border-slate-800 px-3 py-2.5">
@@ -592,6 +652,96 @@ export default function ChatWidget() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Context panel                                                       */
+/* ------------------------------------------------------------------ */
+
+function ContextPanel({
+  pageContext,
+  items,
+  onRemove,
+  onClearAll,
+}: {
+  pageContext: ChatPageContext | null;
+  items: ChatContextItem[];
+  onRemove: (id: string) => void;
+  onClearAll: () => void;
+}) {
+  return (
+    <div className="shrink-0 border-t border-cyan-900/30 bg-cyan-950/20 px-3 py-2">
+      <div className="mb-1 flex items-center justify-between">
+        <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-cyan-400/80">
+          <svg
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            className="h-3 w-3"
+            aria-hidden
+          >
+            <path
+              fillRule="evenodd"
+              d="M15.621 4.379a3 3 0 00-4.242 0l-7 7a3 3 0 004.241 4.243h.001l.497-.5a.75.75 0 011.064 1.057l-.498.501-.002.002a4.5 4.5 0 01-6.364-6.364l7-7a4.5 4.5 0 016.368 6.36l-3.455 3.553A2.625 2.625 0 119.52 9.52l3.45-3.451a.75.75 0 111.061 1.06l-3.45 3.451a1.125 1.125 0 001.587 1.595l3.454-3.553a3 3 0 000-4.242z"
+              clipRule="evenodd"
+            />
+          </svg>
+          <span>
+            {pageContext ? "Current view included" : ""}
+            {pageContext && items.length > 0 ? " · " : ""}
+            {items.length > 0
+              ? `${items.length} attached · sent with next message`
+              : ""}
+          </span>
+        </div>
+        {items.length > 1 && (
+          <button
+            type="button"
+            onClick={onClearAll}
+            className="text-[10px] text-slate-500 transition hover:text-cyan-300"
+          >
+            Clear all
+          </button>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {pageContext && (
+          <span className="inline-flex max-w-full items-center gap-1 rounded-full border border-emerald-800/50 bg-emerald-900/25 py-0.5 px-2 text-[11px] text-emerald-100">
+            <span className="text-[9px] uppercase tracking-wide text-emerald-500/80">
+              viewing
+            </span>
+            <span className="max-w-[260px] truncate">
+              {pageContext.label}
+            </span>
+          </span>
+        )}
+        {items.map((i) => (
+          <span
+            key={i.id}
+            className="inline-flex max-w-full items-center gap-1 rounded-full border border-cyan-800/50 bg-cyan-900/30 py-0.5 pr-1 pl-2 text-[11px] text-cyan-100"
+          >
+            <span className="text-[9px] uppercase tracking-wide text-cyan-500/80">
+              {i.kind}
+            </span>
+            <span className="max-w-[220px] truncate">{i.label}</span>
+            <button
+              type="button"
+              onClick={() => onRemove(i.id)}
+              title="Remove from context"
+              className="ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full text-cyan-400/80 transition hover:bg-cyan-800/60 hover:text-white"
+            >
+              <svg viewBox="0 0 10 10" className="h-2.5 w-2.5">
+                <path
+                  d="M2 2L8 8M8 2L2 8"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                />
+              </svg>
+            </button>
+          </span>
+        ))}
+      </div>
     </div>
   );
 }

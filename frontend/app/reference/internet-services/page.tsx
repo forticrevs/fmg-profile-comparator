@@ -40,6 +40,7 @@ import {
 } from "react";
 
 import {
+  fetchIsdbCatalog,
   fetchIsdbDevices,
   fetchIsdbFqdnCatalog,
   fetchIsdbIpLookup,
@@ -48,10 +49,13 @@ import {
   type IsdbFqdnCatalog,
   type IsdbFqdnGroup,
   type IsdbLookupResponse,
+  type IsdbServiceCatalog,
   type IsdbServiceEntry,
   type IsdbServiceMatch,
 } from "@/lib/api";
 import DataGrid, { type DataGridColumn } from "@/components/DataGrid";
+import AddToChatContextButton from "@/components/AddToChatContextButton";
+import { useChatContext } from "@/components/ChatContext";
 
 /* ------------------------------------------------------------------ */
 /* Local storage — scoped per FMG so two operators sharing a browser  */
@@ -236,6 +240,53 @@ interface ServiceDetailState {
   loading: boolean;
   error: string | null;
   loadedCount: number;
+}
+
+function summarizeServiceEntry(entry: IsdbServiceEntry) {
+  return {
+    proto: PROTO_NAMES[entry.proto] ?? entry.proto,
+    ip_range: formatIpRange(entry.ip_range),
+    ports: (entry.port ?? []).map(formatPort),
+    country_id: entry.country_id,
+    reputation: entry.reputation,
+    popularity: entry.popularity,
+  };
+}
+
+function summarizeLookupResult(result: BatchResult) {
+  if (result.status === "error") {
+    return {
+      target: result.target,
+      status: result.status,
+      error: result.error,
+    };
+  }
+  if (result.status !== "done" || !result.data) {
+    return {
+      target: result.target,
+      status: result.status,
+    };
+  }
+
+  const data = result.data;
+  return {
+    target: result.target,
+    status: result.status,
+    ip: data.ip,
+    resolved_from_fqdn: data.resolved_from_fqdn,
+    geo_country: countryName(data.geoip.location),
+    reverse_dns: data.reverse_dns.domain ?? null,
+    service_match_count: data.matches.services.length,
+    service_matches: data.matches.services.slice(0, 10).map((service) => ({
+      id: service.id,
+      name: service.name,
+      owner: service.owner?.name,
+      reputation: service.reputation,
+      popularity: service.popularity,
+    })),
+    match_error: data.matches.match_error,
+    reputation_error: data.matches.reputation_error,
+  };
 }
 
 function parseTargets(input: string): string[] {
@@ -847,6 +898,7 @@ interface Row extends IsdbFqdnGroup {
 }
 
 export default function InternetServicesPage(): ReactNode {
+  const { setPageContext, clearPageContext } = useChatContext();
   const [devices, setDevices] = useState<IsdbDevice[]>([]);
   const [devicesLoading, setDevicesLoading] = useState(true);
   const [devicesError, setDevicesError] = useState<string | null>(null);
@@ -858,6 +910,15 @@ export default function InternetServicesPage(): ReactNode {
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
 
+  // ISDB service catalog — full list of internet services
+  const [svcCatalog, setSvcCatalog] = useState<IsdbServiceCatalog | null>(null);
+  const [svcCatalogLoading, setSvcCatalogLoading] = useState(false);
+  const [svcCatalogError, setSvcCatalogError] = useState<string | null>(null);
+  const [svcSearch, setSvcSearch] = useState("");
+  const [svcExpanded, setSvcExpanded] = useState<
+    Map<number, ServiceDetailState>
+  >(new Map());
+
   const [search, setSearch] = useState("");
 
   // IP lookup state. Input stays editable during a lookup so the
@@ -868,6 +929,7 @@ export default function InternetServicesPage(): ReactNode {
   const [batchResults, setBatchResults] = useState<BatchResult[]>([]);
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupError, setLookupError] = useState<string | null>(null);
+  const lookupTargets = useMemo(() => parseTargets(lookupInput), [lookupInput]);
 
   // Fetch managed devices on mount. We keep the selected device even if
   // it's not in the current list (stale localStorage) so the operator can
@@ -902,7 +964,7 @@ export default function InternetServicesPage(): ReactNode {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Fetch catalog whenever the selected device changes.
+  // Fetch both catalogs whenever the selected device changes.
   useEffect(() => {
     if (!selectedDevice) return;
     let cancelled = false;
@@ -919,6 +981,21 @@ export default function InternetServicesPage(): ReactNode {
       .finally(() => {
         if (!cancelled) setCatalogLoading(false);
       });
+
+    setSvcCatalogLoading(true);
+    setSvcCatalogError(null);
+    fetchIsdbCatalog(selectedDevice)
+      .then((data) => {
+        if (cancelled) return;
+        setSvcCatalog(data);
+      })
+      .catch((e: Error) => {
+        if (!cancelled) setSvcCatalogError(e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setSvcCatalogLoading(false);
+      });
+
     return () => {
       cancelled = true;
     };
@@ -927,6 +1004,13 @@ export default function InternetServicesPage(): ReactNode {
   const handleDeviceChange = useCallback((name: string) => {
     setSelectedDevice(name);
     saveSelectedDevice(name);
+    setCatalog(null);
+    setCatalogError(null);
+    setSvcCatalog(null);
+    setSvcCatalogError(null);
+    setSvcExpanded(new Map());
+    setBatchResults([]);
+    setLookupError(null);
   }, []);
 
   const handleRefresh = useCallback(() => {
@@ -938,6 +1022,99 @@ export default function InternetServicesPage(): ReactNode {
       .catch((e: Error) => setCatalogError(e.message))
       .finally(() => setCatalogLoading(false));
   }, [selectedDevice]);
+
+  const handleSvcRefresh = useCallback(() => {
+    if (!selectedDevice) return;
+    setSvcCatalogLoading(true);
+    setSvcCatalogError(null);
+    fetchIsdbCatalog(selectedDevice, "root", true)
+      .then((data) => setSvcCatalog(data))
+      .catch((e: Error) => setSvcCatalogError(e.message))
+      .finally(() => setSvcCatalogLoading(false));
+  }, [selectedDevice]);
+
+  const handleToggleSvcExpand = useCallback(
+    async (svcId: number) => {
+      if (!selectedDevice) return;
+      let wasExpanded = false;
+      setSvcExpanded((prev) => {
+        if (prev.has(svcId)) {
+          wasExpanded = true;
+          const next = new Map(prev);
+          next.delete(svcId);
+          return next;
+        }
+        const next = new Map(prev);
+        next.set(svcId, {
+          total: null,
+          entries: [],
+          loading: true,
+          error: null,
+          loadedCount: 0,
+        });
+        return next;
+      });
+      if (wasExpanded) return;
+      try {
+        const [summary, firstPage] = await Promise.all([
+          fetchIsdbServiceDetails(selectedDevice, svcId, { summaryOnly: true }),
+          fetchIsdbServiceDetails(selectedDevice, svcId, { start: 0, count: 1000 }),
+        ]);
+        setSvcExpanded((prev) => {
+          const next = new Map(prev);
+          next.set(svcId, {
+            total: summary.total ?? firstPage.entries?.length ?? 0,
+            entries: firstPage.entries ?? [],
+            loading: false,
+            error: null,
+            loadedCount: firstPage.entries?.length ?? 0,
+          });
+          return next;
+        });
+      } catch (err) {
+        setSvcExpanded((prev) => {
+          const next = new Map(prev);
+          next.set(svcId, {
+            total: null,
+            entries: [],
+            loading: false,
+            error: err instanceof Error ? err.message : "Failed to load details",
+            loadedCount: 0,
+          });
+          return next;
+        });
+      }
+    },
+    [selectedDevice],
+  );
+
+  const handleSvcLoadMore = useCallback(
+    async (svcId: number) => {
+      if (!selectedDevice) return;
+      const current = svcExpanded.get(svcId);
+      if (!current) return;
+      try {
+        const page = await fetchIsdbServiceDetails(selectedDevice, svcId, {
+          start: current.loadedCount,
+          count: 1000,
+        });
+        setSvcExpanded((prev) => {
+          const next = new Map(prev);
+          const c = next.get(svcId);
+          if (!c) return next;
+          next.set(svcId, {
+            ...c,
+            entries: [...c.entries, ...(page.entries ?? [])],
+            loadedCount: c.loadedCount + (page.entries?.length ?? 0),
+          });
+          return next;
+        });
+      } catch {
+        /* best-effort — user can retry */
+      }
+    },
+    [selectedDevice, svcExpanded],
+  );
 
   const handleLookup = useCallback(
     async (e?: React.FormEvent) => {
@@ -1040,6 +1217,123 @@ export default function InternetServicesPage(): ReactNode {
     [filteredRows],
   );
 
+  // Service catalog: filtered + paginated rows
+  const svcPage = 100;
+  const [svcPageNum, setSvcPageNum] = useState(1);
+  const svcFiltered = useMemo(() => {
+    const all = svcCatalog?.services ?? [];
+    if (!svcSearch.trim()) return all;
+    const q = svcSearch.trim().toLowerCase();
+    return all.filter((s) => {
+      const hay = [s.name, String(s["internet-service-id"]), s.type ?? ""]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }, [svcCatalog, svcSearch]);
+
+  const svcTotalPages = Math.max(1, Math.ceil(svcFiltered.length / svcPage));
+  const svcSafePage = Math.min(svcPageNum, svcTotalPages);
+  const svcPaginated = useMemo(
+    () => svcFiltered.slice((svcSafePage - 1) * svcPage, svcSafePage * svcPage),
+    [svcFiltered, svcSafePage],
+  );
+
+  // Reset page when search changes
+  useEffect(() => { setSvcPageNum(1); }, [svcSearch]);
+
+  useEffect(() => {
+    return () => clearPageContext("reference:internet-services");
+  }, [clearPageContext]);
+
+  useEffect(() => {
+    setPageContext({
+      id: "reference:internet-services",
+      kind: "internet_services",
+      label: "Internet Service Database",
+      data: {
+        selected_device: selectedDevice,
+        devices_loading: devicesLoading,
+        device_count: devices.length,
+        online_devices: devices
+          .filter((device) => device.conn_status === "up")
+          .map((device) => device.name),
+        lookup: {
+          targets: lookupTargets.slice(0, 20),
+          loading: lookupLoading,
+          error: lookupError,
+          result_count: batchResults.length,
+          results: batchResults.slice(0, 20).map(summarizeLookupResult),
+        },
+        fqdn_catalog: {
+          loaded: !!catalog,
+          loading: catalogLoading,
+          error: catalogError,
+          group_count: catalog?.group_count ?? 0,
+          fqdn_count: catalog?.fqdn_count ?? 0,
+          search,
+          filtered_group_count: filteredRows.length,
+          fqdns_in_view: totalFqdnsInView,
+          group_sample: filteredRows.slice(0, 5).map((row) => ({
+            name: row.name,
+            vendor: row.vendor,
+            product: row.product,
+            fqdn_count: row.fqdns.length,
+            fqdn_sample: row.fqdns.slice(0, 15),
+          })),
+        },
+        service_catalog: {
+          loaded: !!svcCatalog,
+          loading: svcCatalogLoading,
+          error: svcCatalogError,
+          service_count: svcCatalog?.service_count ?? 0,
+          search: svcSearch,
+          filtered_service_count: svcFiltered.length,
+          page: svcSafePage,
+          page_size: svcPage,
+          service_sample: svcPaginated.slice(0, 10).map((svc) => ({
+            name: svc.name,
+            internet_service_id: svc["internet-service-id"],
+            type: svc.type ?? null,
+          })),
+        },
+        expanded_services: Array.from(svcExpanded.entries())
+          .slice(0, 10)
+          .map(([id, detail]) => ({
+            internet_service_id: id,
+            loaded_count: detail.loadedCount,
+            total: detail.total,
+            error: detail.error,
+            entry_sample: detail.entries.slice(0, 10).map(summarizeServiceEntry),
+          })),
+      },
+    });
+  }, [
+    batchResults,
+    catalog,
+    catalogError,
+    catalogLoading,
+    clearPageContext,
+    devices,
+    devicesLoading,
+    filteredRows,
+    lookupError,
+    lookupLoading,
+    lookupTargets,
+    search,
+    selectedDevice,
+    setPageContext,
+    svcCatalog,
+    svcCatalogError,
+    svcCatalogLoading,
+    svcExpanded,
+    svcFiltered.length,
+    svcPaginated,
+    svcSafePage,
+    svcSearch,
+    totalFqdnsInView,
+  ]);
+
   /* ---------------------------------------------------------------- */
   /* Column definitions                                                */
   /* ---------------------------------------------------------------- */
@@ -1114,9 +1408,10 @@ export default function InternetServicesPage(): ReactNode {
             <div>
               <h1 className="text-2xl font-bold">Internet Service Database</h1>
               <p className="mt-1 max-w-3xl text-sm text-slate-500">
-                FortiGuard&apos;s catalog of well-known SaaS FQDN groups.
-                FortiManager doesn&apos;t host this API directly, so lookups
-                are proxied through a managed FortiGate of your choice.
+                FortiGuard&apos;s internet service catalog — IP lookup,
+                FQDN groups, and the full service directory. FortiManager
+                doesn&apos;t host these APIs directly, so lookups are
+                proxied through a managed FortiGate of your choice.
               </p>
             </div>
             <div className="rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-3">
@@ -1313,6 +1608,262 @@ export default function InternetServicesPage(): ReactNode {
                 }
               />
             ) : null}
+          </>
+        )}
+
+        {/* ------------------------------------------------------------ */}
+        {/* Service catalog — browseable list of all ISDB entries         */}
+        {/* ------------------------------------------------------------ */}
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
+            Service catalog
+          </h2>
+          <div className="text-[10px] text-slate-600">
+            All FortiGuard internet services
+          </div>
+        </div>
+
+        {/* Service catalog toolbar */}
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-800 bg-slate-900/40 p-3">
+          <input
+            type="text"
+            value={svcSearch}
+            onChange={(e) => setSvcSearch(e.target.value)}
+            placeholder="Search services by name or ID…"
+            className="w-72 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/60 focus:outline-none"
+          />
+          <button
+            type="button"
+            onClick={handleSvcRefresh}
+            disabled={!selectedDevice || svcCatalogLoading}
+            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-300 transition hover:border-cyan-600/60 hover:text-cyan-300 disabled:cursor-not-allowed disabled:opacity-40"
+            title="Bypass cache and re-fetch"
+          >
+            {svcCatalogLoading ? "Refreshing…" : "Refresh"}
+          </button>
+          {svcCatalog && (
+            <div className="ml-auto text-xs tabular-nums text-slate-500">
+              <span className="text-slate-300">
+                {svcFiltered.length}
+              </span>{" "}
+              of {svcCatalog.service_count} services
+              {svcCatalog.cached && (
+                <span
+                  className="ml-2 inline-flex items-center rounded border border-slate-800 bg-slate-950 px-1.5 py-0.5 text-[10px] font-mono uppercase text-slate-500"
+                  title="Served from backend cache"
+                >
+                  cache
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+
+        {svcCatalogError && (
+          <div className="rounded-xl border border-red-900/60 bg-red-950/40 px-4 py-3 text-sm text-red-200">
+            {svcCatalogError}
+          </div>
+        )}
+
+        {/* Service catalog list */}
+        {selectedDevice && !svcCatalogError && (
+          <>
+            {svcCatalogLoading && !svcCatalog ? (
+              <div className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-12 text-sm text-slate-400">
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-700 border-t-cyan-400" />
+                Fetching service catalog from {selectedDevice}…
+              </div>
+            ) : svcCatalog ? (
+              <div className="space-y-px rounded-xl border border-slate-800 bg-slate-950/40 overflow-hidden">
+                {/* Header */}
+                <div className="grid grid-cols-[minmax(0,3fr)_120px_100px] gap-px border-b border-slate-800 bg-slate-950/95 px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 sticky top-0 z-10 backdrop-blur">
+                  <div>Name</div>
+                  <div>Service ID</div>
+                  <div>Type</div>
+                </div>
+                {svcPaginated.length === 0 && (
+                  <div className="px-4 py-10 text-center text-sm text-slate-500">
+                    {svcSearch ? "No services match your search." : "No services found."}
+                  </div>
+                )}
+                {svcPaginated.map((svc) => {
+                  const sid = svc["internet-service-id"];
+                  const detail = svcExpanded.get(sid);
+                  const isExpanded = !!detail;
+                  return (
+                    <div key={sid}>
+                      <div
+                        className="grid grid-cols-[minmax(0,3fr)_120px_100px] gap-px px-4 py-2.5 text-left transition hover:bg-slate-800/20 border-b border-slate-900"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => handleToggleSvcExpand(sid)}
+                          className="flex items-center gap-2 text-xs text-slate-200 text-left min-w-0"
+                        >
+                          <span
+                            className={`text-[10px] text-slate-500 transition-transform ${isExpanded ? "rotate-90" : ""}`}
+                          >
+                            ▶
+                          </span>
+                          <span className="truncate">{svc.name}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleSvcExpand(sid)}
+                          className="text-xs font-mono text-slate-500 tabular-nums text-left"
+                        >
+                          {sid}
+                        </button>
+                        <div className="flex items-center justify-between gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleSvcExpand(sid)}
+                            className="text-xs text-slate-500 text-left flex-1 min-w-0 truncate"
+                          >
+                            {svc.type ?? "—"}
+                          </button>
+                          <AddToChatContextButton
+                            item={{
+                              id: `isdb_service:${sid}`,
+                              kind: "isdb_service",
+                              label: `${svc.name} (id ${sid})`,
+                              data: {
+                                name: svc.name,
+                                internet_service_id: sid,
+                                type: svc.type ?? null,
+                                loaded_entry_count: detail?.loadedCount ?? 0,
+                                total_entries: detail?.total ?? null,
+                                entry_sample: (detail?.entries ?? [])
+                                  .slice(0, 20)
+                                  .map(summarizeServiceEntry),
+                              },
+                            }}
+                          />
+                        </div>
+                      </div>
+                      {isExpanded && (
+                        <div className="border-b border-slate-800/60 bg-slate-900/30 px-6 py-3">
+                          {detail.loading ? (
+                            <div className="flex items-center gap-2 py-2 text-xs text-slate-400">
+                              <div className="h-3 w-3 animate-spin rounded-full border border-slate-700 border-t-cyan-400" />
+                              Loading entries…
+                            </div>
+                          ) : detail.error ? (
+                            <div className="text-xs text-red-400">{detail.error}</div>
+                          ) : detail.entries.length === 0 ? (
+                            <div className="text-xs text-slate-600 italic">
+                              No IP-range entries for this service
+                              {detail.total != null && ` (total: ${detail.total})`}.
+                            </div>
+                          ) : (
+                            <>
+                              <div className="mb-2 text-[10px] text-slate-500">
+                                {detail.loadedCount.toLocaleString()} of{" "}
+                                {(detail.total ?? 0).toLocaleString()} entries loaded
+                              </div>
+                              <table className="w-full text-xs border-collapse">
+                                <thead>
+                                  <tr className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                                    <th className="px-2 py-1.5 text-left">Proto</th>
+                                    <th className="px-2 py-1.5 text-left">IP Range</th>
+                                    <th className="px-2 py-1.5 text-left">Ports</th>
+                                    <th className="px-2 py-1.5 text-left">Country</th>
+                                    <th className="px-2 py-1.5 text-left">Reputation</th>
+                                    <th className="px-2 py-1.5 text-left">Popularity</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {detail.entries.map((entry, i) => (
+                                    <tr
+                                      key={i}
+                                      className="border-t border-slate-800/20 hover:bg-slate-800/20"
+                                    >
+                                      <td className="px-2 py-1.5 font-mono text-slate-400">
+                                        {PROTO_NAMES[entry.proto] ?? entry.proto}
+                                      </td>
+                                      <td className="px-2 py-1.5 font-mono text-slate-300">
+                                        {formatIpRange(entry.ip_range)}
+                                      </td>
+                                      <td className="px-2 py-1.5 font-mono text-slate-400">
+                                        {(entry.port ?? []).map(formatPort).join(", ") || "—"}
+                                      </td>
+                                      <td className="px-2 py-1.5 text-slate-400">
+                                        {entry.country_id || "—"}
+                                      </td>
+                                      <td className="px-2 py-1.5">
+                                        <ReputationPips value={entry.reputation} />
+                                      </td>
+                                      <td className="px-2 py-1.5">
+                                        <PopularityBar value={entry.popularity} />
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                              {detail.total != null &&
+                                detail.loadedCount < detail.total && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleSvcLoadMore(sid);
+                                    }}
+                                    className="mt-2 rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-[11px] text-slate-400 transition hover:border-cyan-600/60 hover:text-cyan-300"
+                                  >
+                                    Load next{" "}
+                                    {Math.min(
+                                      1000,
+                                      detail.total - detail.loadedCount,
+                                    ).toLocaleString()}{" "}
+                                    entries
+                                  </button>
+                                )}
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
+
+            {/* Service catalog pagination */}
+            {svcCatalog && svcFiltered.length > svcPage && (
+              <div className="flex items-center justify-center gap-2 pt-2">
+                <button
+                  onClick={() => setSvcPageNum(1)}
+                  disabled={svcSafePage <= 1}
+                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-400 transition hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  ««
+                </button>
+                <button
+                  onClick={() => setSvcPageNum((p) => Math.max(1, p - 1))}
+                  disabled={svcSafePage <= 1}
+                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-400 transition hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  ‹ Prev
+                </button>
+                <span className="text-xs text-slate-400 tabular-nums">
+                  Page {svcSafePage} of {svcTotalPages}
+                </span>
+                <button
+                  onClick={() => setSvcPageNum((p) => Math.min(svcTotalPages, p + 1))}
+                  disabled={svcSafePage >= svcTotalPages}
+                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-400 transition hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  Next ›
+                </button>
+                <button
+                  onClick={() => setSvcPageNum(svcTotalPages)}
+                  disabled={svcSafePage >= svcTotalPages}
+                  className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-400 transition hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  »»
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>

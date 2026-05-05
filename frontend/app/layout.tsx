@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import AuthGuard from "@/components/AuthGuard";
 import ChatWidget from "@/components/ChatWidget";
+import { ChatContextProvider } from "@/components/ChatContext";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -20,8 +21,10 @@ export default function RootLayout({
     <html lang="en" className="dark">
       <body className={`${inter.className} bg-slate-950 antialiased`}>
         <AuthGuard>
-          {children}
-          <ChatWidget />
+          <ChatContextProvider>
+            {children}
+            <ChatWidget />
+          </ChatContextProvider>
         </AuthGuard>
       </body>
     </html>

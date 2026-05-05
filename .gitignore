@@ -36,6 +36,7 @@ out/
 Thumbs.db
 todos.md
 CHECKPOINT.md
+NEXT_TASK.md
 
 # Sensitive runtime state — never commit
 backend/.fmg_key

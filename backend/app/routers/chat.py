@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.dependencies import get_current_user
-from app.services.ai import chat, registry
+from app.services.ai import chat, rag, registry
 from app.services.ai.types import ChatRequest, ProviderKind
 
 logger = logging.getLogger(__name__)
@@ -51,12 +51,17 @@ async def chat_message(
         # First event: session ID so the frontend can track it.
         yield f"data: {json.dumps({'session_id': session.id})}\n\n"
         try:
+            rag_context = await rag.retrieve_context(
+                body.message,
+                body.page_context or None,
+            )
             async for token in chat.send_message(
                 session,
                 body.message,
                 provider,
                 page_context=body.page_context or None,
                 system_prompt=body.system_prompt,
+                rag_context=rag_context,
             ):
                 yield f"data: {json.dumps({'token': token})}\n\n"
         except Exception as exc:

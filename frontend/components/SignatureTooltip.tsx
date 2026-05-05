@@ -41,6 +41,7 @@ import {
   type EncyclopediaResponse,
   type IpsEncyclopedia,
 } from "@/lib/api";
+import AddToChatContextButton from "@/components/AddToChatContextButton";
 
 type Source = "ips" | "app";
 
@@ -280,7 +281,17 @@ function EncyclopediaCard({ data }: { data: EncyclopediaResponse }) {
             </div>
           </div>
           <div className="flex flex-col items-end gap-1.5">
-            <RiskPill value={data.Risk} />
+            <div className="flex items-center gap-1.5">
+              <AddToChatContextButton
+                item={{
+                  id: `${isIps ? "ips_signature" : "app_signature"}:${data.ID}`,
+                  kind: isIps ? "ips_signature" : "app_signature",
+                  label: data.Name,
+                  data,
+                }}
+              />
+              <RiskPill value={data.Risk} />
+            </div>
             <ActionPill value={data.DefaultAction} />
           </div>
         </div>

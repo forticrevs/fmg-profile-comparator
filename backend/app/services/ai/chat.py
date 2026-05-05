@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator
 
 from .base import LLMProvider
+from .summarize import render_page_context
 from .types import ChatMessage, ChatSession
 
 logger = logging.getLogger(__name__)
@@ -77,11 +78,11 @@ def _build_messages(
             "\n\n--- Relevant knowledge base excerpts ---\n" + rag_context
         )
 
-    if page_context:
-        ctx_json = json.dumps(page_context, indent=2, default=str)
+    ctx_block = render_page_context(page_context)
+    if ctx_block:
         parts.append(
             "\n\n--- Current UI context (what the user is looking at) ---\n"
-            + ctx_json
+            + ctx_block
         )
 
     messages: list[dict[str, str]] = [

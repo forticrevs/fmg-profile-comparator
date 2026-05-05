@@ -15,6 +15,7 @@ import CommentCell from "@/components/CommentCell";
 import FieldVisibilityMenu, {
   loadHiddenFields,
 } from "@/components/FieldVisibilityMenu";
+import AddToChatContextButton from "@/components/AddToChatContextButton";
 
 // Free-form prose fields — rendered through <CommentCell /> with a
 // click-to-expand preview and (in baseline mode) a diff-aware offset.
@@ -249,6 +250,66 @@ function formatValue(v: unknown): { text: string; tooltip: string; resolved: boo
   return { text: String(v), tooltip: String(v), resolved: false };
 }
 
+function compactProfileValue(v: unknown): unknown {
+  const formatted = formatValue(v).text;
+  return formatted.length > 400 ? `${formatted.slice(0, 400)}...` : formatted;
+}
+
+function collectionCounts(profile: Record<string, unknown> | undefined) {
+  if (!profile) return {};
+  const counts: Record<string, number> = {};
+  for (const [key, value] of Object.entries(profile)) {
+    if (Array.isArray(value)) counts[key] = value.length;
+  }
+  return counts;
+}
+
+function buildProfileContextSummary({
+  name,
+  profileType,
+  rawProfile,
+  fields,
+  baseline,
+  pinnedSet,
+}: {
+  name: string;
+  profileType: string;
+  rawProfile: Record<string, unknown> | undefined;
+  fields: ComparisonField[];
+  baseline: string | null;
+  pinnedSet: Set<string>;
+}) {
+  const keys = rawProfile ? Object.keys(rawProfile).sort() : [];
+  const driftFields = fields.filter((field) => {
+    if (baseline) return field.differs_from_baseline?.[name] === true;
+    return !field.in_sync;
+  });
+
+  return {
+    name,
+    profile_type: profileType,
+    baseline_profile: baseline === name,
+    compared_against: baseline,
+    raw_key_count: keys.length,
+    top_level_keys: keys.slice(0, 40),
+    collection_counts: collectionCounts(rawProfile),
+    drift_field_count: driftFields.length,
+    pinned_drift_fields: driftFields
+      .filter((field) => pinnedSet.has(field.field_path))
+      .map((field) => field.field_path),
+    top_drift_fields: driftFields.slice(0, 30).map((field) => ({
+      field_path: field.field_path,
+      label: field.label,
+      current_value: compactProfileValue(field.values[name]),
+      baseline_value:
+        baseline && baseline !== name
+          ? compactProfileValue(field.values[baseline])
+          : undefined,
+      pinned: pinnedSet.has(field.field_path),
+    })),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
@@ -329,6 +390,24 @@ export default function ComparisonTable({
   }, [availableLeaves, schemaFields]);
 
   const pinnedSet = useMemo(() => new Set(pinnedFields), [pinnedFields]);
+
+  const profileContextByName = useMemo(
+    () =>
+      Object.fromEntries(
+        orderedNames.map((name) => [
+          name,
+          buildProfileContextSummary({
+            name,
+            profileType,
+            rawProfile: rawProfiles[name],
+            fields,
+            baseline,
+            pinnedSet,
+          }),
+        ]),
+      ),
+    [orderedNames, profileType, rawProfiles, fields, baseline, pinnedSet],
+  );
 
   const filteredFields = useMemo(() => {
     let result = fields;
@@ -718,6 +797,14 @@ export default function ComparisonTable({
                         </span>
                       )}
                       <span className="truncate">{name}</span>
+                      <AddToChatContextButton
+                        item={{
+                          id: `${profileType}_profile:${name}`,
+                          kind: `${profileType}_profile`,
+                          label: name,
+                          data: profileContextByName[name] ?? { name },
+                        }}
+                      />
                       {!isBaselineCol && (
                         <button
                           type="button"

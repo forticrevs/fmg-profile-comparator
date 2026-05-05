@@ -27,6 +27,7 @@ import FieldVisibilityMenu, {
   saveHiddenFields,
 } from "@/components/FieldVisibilityMenu";
 import SignatureTooltip from "@/components/SignatureTooltip";
+import { useChatContext } from "@/components/ChatContext";
 
 type ReferenceKind =
   | "application-signatures"
@@ -80,7 +81,7 @@ const OPERATOR_LABELS: Record<FilterOperator, string> = {
 /* would either never reset (stale customers keep broken layouts) or   */
 /* reset every visit (would destroy customizations).                   */
 /* ------------------------------------------------------------------ */
-const DEFAULTS_VERSION = 2;
+const DEFAULTS_VERSION = 3;
 
 interface ReferenceDefaults {
   visibleColumns: string[];
@@ -103,6 +104,7 @@ const REFERENCE_DEFAULTS: Partial<Record<ReferenceKind, ReferenceDefaults>> = {
       "os",
       "service",
       "severity",
+      "status",
       "vuln_type",
     ],
     visibleColumns: [
@@ -116,6 +118,7 @@ const REFERENCE_DEFAULTS: Partial<Record<ReferenceKind, ReferenceDefaults>> = {
       "os",
       "service",
       "severity",
+      "status",
       "vuln_type",
     ],
     widths: {
@@ -333,6 +336,67 @@ function isObjectArray(value: unknown): value is Record<string, unknown>[] {
 /* ------------------------------------------------------------------ */
 /* Format helpers                                                      */
 /* ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* Sorting                                                             */
+/* ------------------------------------------------------------------ */
+type SortDir = "asc" | "desc";
+
+function loadSort(storageKey: string): { col: string; dir: SortDir } | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(`sort:${storageKey}`);
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    if (obj && typeof obj.col === "string" && (obj.dir === "asc" || obj.dir === "desc"))
+      return obj;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSort(storageKey: string, col: string, dir: SortDir): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(`sort:${storageKey}`, JSON.stringify({ col, dir }));
+  } catch { /* ignore */ }
+}
+
+function clearSort(storageKey: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(`sort:${storageKey}`);
+  } catch { /* ignore */ }
+}
+
+/** Extract a comparable primitive from a cell value. Understands numbers,
+ *  CVE strings, dates in YYYYMMDD form, and epoch timestamps. Returns
+ *  the original string as fallback for lexicographic comparison. */
+function sortKey(col: string, value: unknown): string | number {
+  const s = formatValue(value);
+  if (s === "—") return "";
+
+  // Numeric columns — compare as number when possible
+  const n = Number(s);
+  if (s !== "" && !isNaN(n)) return n;
+
+  // CVE column — normalise so "CVE-2023-0001" sorts numerically
+  if (isCVEColumn(col)) {
+    const formatted = formatCVE(s);
+    const m = formatted.match(/^CVE-(\d+)-(\d+)$/);
+    if (m) return Number(m[1]) * 1e7 + Number(m[2]);
+  }
+
+  // Date column — "20220502" already sorts lexicographically, but
+  // we normalise to number for safety
+  if (isDateColumn(col)) {
+    const dn = Number(s.replace(/-/g, ""));
+    if (!isNaN(dn)) return dn;
+  }
+
+  return s.toLowerCase();
+}
+
 function formatValue(value: unknown): string {
   if (value === null || value === undefined || value === "") return "—";
   if (Array.isArray(value))
@@ -343,6 +407,23 @@ function formatValue(value: unknown): string {
       .join(" | ");
   }
   return String(value);
+}
+
+function compactReferenceValue(value: unknown): unknown {
+  const text = formatValue(value);
+  return text.length > 300 ? `${text.slice(0, 300)}...` : text;
+}
+
+function compactReferenceRow(
+  row: Record<string, unknown>,
+  columns: string[],
+): Record<string, unknown> {
+  return Object.fromEntries(
+    columns.slice(0, 8).map((column) => [
+      column,
+      compactReferenceValue(row[column]),
+    ]),
+  );
 }
 
 /** Format a cell value for search — applies the same display transforms
@@ -591,6 +672,7 @@ function CellContent({
 /* Main component                                                      */
 /* ------------------------------------------------------------------ */
 export default function ReferenceExplorer({ kind, title, description }: Props) {
+  const { setPageContext, clearPageContext } = useChatContext();
   const [data, setData] = useState<ReferenceListResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -599,6 +681,10 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(100);
   const [columnOrder, setColumnOrder] = useState<string[] | null>(null);
+
+  // Sort state — persisted per reference kind
+  const [sortCol, setSortCol] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
 
   // Drag state for column reordering
   const dragCol = useRef<string | null>(null);
@@ -660,6 +746,11 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
   const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
   useEffect(() => {
     setHiddenColumns(loadHiddenFields(visibilityKey));
+    const persisted = loadSort(visibilityKey);
+    if (persisted) {
+      setSortCol(persisted.col);
+      setSortDir(persisted.dir);
+    }
   }, [visibilityKey]);
 
   // Use user-ordered columns if set, otherwise detected; then drop any
@@ -748,7 +839,7 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
     const items = data?.items ?? [];
     const searchQuery = deferredSearch.trim().toLowerCase();
 
-    return items.filter((item) => {
+    const filtered = items.filter((item) => {
       if (searchQuery) {
         const haystack = Object.entries(item)
           .map(([col, value]) => formatValueForSearch(col, value))
@@ -768,7 +859,23 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
 
       return true;
     });
-  }, [data, deferredSearch, filters]);
+
+    if (sortCol) {
+      const dir = sortDir === "asc" ? 1 : -1;
+      filtered.sort((a, b) => {
+        const ka = sortKey(sortCol, a[sortCol]);
+        const kb = sortKey(sortCol, b[sortCol]);
+        if (ka === kb) return 0;
+        if (ka === "") return 1;   // blanks to bottom regardless of dir
+        if (kb === "") return -1;
+        if (typeof ka === "number" && typeof kb === "number")
+          return (ka - kb) * dir;
+        return String(ka).localeCompare(String(kb)) * dir;
+      });
+    }
+
+    return filtered;
+  }, [data, deferredSearch, filters, sortCol, sortDir]);
 
   // Reset to page 1 when filters/search change
   useEffect(() => {
@@ -789,6 +896,60 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
     [filteredItems, safePage, pageSize],
   );
 
+  useEffect(() => {
+    return () => clearPageContext(`reference:${kind}`);
+  }, [clearPageContext, kind]);
+
+  useEffect(() => {
+    setPageContext({
+      id: `reference:${kind}`,
+      kind: "reference_table",
+      label: title,
+      data: {
+        reference_kind: kind,
+        title,
+        description,
+        loading,
+        error,
+        total_count: data?.count ?? 0,
+        filtered_count: filteredItems.length,
+        visible_columns: columns.slice(0, 24),
+        hidden_column_count: hiddenColumns.size,
+        search: deferredSearch,
+        filters: filters.map((rule) => ({
+          column: rule.column,
+          operator: rule.operator,
+          value: rule.value,
+        })),
+        sort: sortCol ? { column: sortCol, direction: sortDir } : null,
+        page: safePage,
+        page_size: pageSize,
+        visible_row_sample: paginatedItems
+          .slice(0, 5)
+          .map((row) => compactReferenceRow(row, columns)),
+      },
+    });
+  }, [
+    clearPageContext,
+    columns,
+    data?.count,
+    deferredSearch,
+    description,
+    error,
+    filteredItems.length,
+    filters,
+    hiddenColumns.size,
+    kind,
+    loading,
+    pageSize,
+    paginatedItems,
+    safePage,
+    setPageContext,
+    sortCol,
+    sortDir,
+    title,
+  ]);
+
   const addFilter = (column?: string) => {
     const defaultColumn = column ?? columns[0];
     if (!defaultColumn) return;
@@ -803,6 +964,28 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
       },
     ]);
   };
+
+  const handleSort = useCallback(
+    (col: string) => {
+      if (sortCol === col) {
+        if (sortDir === "asc") {
+          setSortDir("desc");
+          saveSort(visibilityKey, col, "desc");
+        } else {
+          // Third click clears sort
+          setSortCol(null);
+          setSortDir("asc");
+          clearSort(visibilityKey);
+        }
+      } else {
+        setSortCol(col);
+        setSortDir("asc");
+        saveSort(visibilityKey, col, "asc");
+      }
+      setPage(1);
+    },
+    [sortCol, sortDir, visibilityKey],
+  );
 
   // Column drag-and-drop handlers
   const handleDragStart = useCallback((col: string) => {
@@ -1007,7 +1190,22 @@ export default function ReferenceExplorer({ kind, title, description }: Props) {
                   header: (
                     <div className="flex items-center gap-2">
                       <span className="text-slate-600 text-[10px]">⠿</span>
-                      <span className="truncate">{column}</span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSort(column);
+                        }}
+                        className="truncate hover:text-slate-200 transition"
+                        title={`Sort by ${column}`}
+                      >
+                        {column}
+                        {sortCol === column && (
+                          <span className="ml-1 text-cyan-400">
+                            {sortDir === "asc" ? "↑" : "↓"}
+                          </span>
+                        )}
+                      </button>
                       <button
                         type="button"
                         onClick={(e) => {

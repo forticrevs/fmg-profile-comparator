@@ -499,3 +499,70 @@ async def isdb_service_details(
         resp["start"] = body.start
         resp["count"] = body.count
     return resp
+
+
+# --------------------------------------------------------------------
+# Service catalog — list every ISDB internet service name
+# --------------------------------------------------------------------
+
+_CATALOG_TTL_SECONDS = 30 * 60
+_catalog_cache: dict[tuple[str, str, str], tuple[float, dict[str, Any]]] = {}
+
+
+@router.get("/catalog")
+async def get_isdb_catalog(
+    device: str = Query(..., min_length=1),
+    vdom: str = Query("root"),
+    refresh: bool = Query(False),
+    fmg: FMGClient = Depends(get_current_fmg),
+) -> dict[str, Any]:
+    """Return every internet service name in the FortiGuard ISDB.
+
+    Proxies ``/api/v2/cmdb/firewall/internet-service-name`` through the
+    selected FortiGate. The response is a flat list of ``{name, id,
+    type, ...}`` objects — lightweight metadata for a browseable catalog.
+    Details (IP ranges, ports, reputation) are loaded on-demand via the
+    ``/service-details`` endpoint when the user expands a row.
+
+    Cached 30 minutes per ``(fmg_host, device, vdom)`` — the ISDB only
+    updates on a FortiGuard signature push.
+    """
+    key = (fmg._host, device, vdom)
+    now = time.monotonic()
+    if not refresh:
+        hit = _catalog_cache.get(key)
+        if hit and now - hit[0] < _CATALOG_TTL_SECONDS:
+            return {**hit[1], "cached": True}
+
+    resource = f"/api/v2/cmdb/firewall/internet-service-name?vdom={vdom}"
+    try:
+        body = await fos_proxy.proxy_call(fmg, device, resource, timeout=60)
+    except fos_proxy.FosProxyError as exc:
+        logger.warning("isdb: catalog proxy call failed: %s", exc)
+        raise HTTPException(502, str(exc))
+    except Exception as exc:
+        logger.exception("isdb: catalog proxy call errored")
+        raise HTTPException(502, f"ISDB catalog fetch failed: {exc}")
+
+    results = body.get("results")
+    if not isinstance(results, list):
+        raise HTTPException(
+            502,
+            f"Unexpected FOS response shape for internet-service-name: "
+            f"results={type(results).__name__}",
+        )
+
+    # Each entry has at least: name, internet-service-id, type.
+    # Sort by name for stable output.
+    services = sorted(results, key=lambda s: (s.get("name") or "").lower())
+
+    payload: dict[str, Any] = {
+        "device": device,
+        "vdom": vdom,
+        "service_count": len(services),
+        "services": services,
+        "cached": False,
+        "fetched_at": int(time.time()),
+    }
+    _catalog_cache[key] = (now, payload)
+    return payload

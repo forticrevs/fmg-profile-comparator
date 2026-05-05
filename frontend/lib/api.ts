@@ -470,6 +470,45 @@ export interface IsdbFqdnCatalog {
   fetched_at: number;
 }
 
+/* ----- ISDB service catalog ----- */
+
+export interface IsdbCatalogService {
+  name: string;
+  "internet-service-id": number;
+  type?: string;
+  [key: string]: unknown;
+}
+
+export interface IsdbServiceCatalog {
+  device: string;
+  vdom: string;
+  cached: boolean;
+  service_count: number;
+  services: IsdbCatalogService[];
+  fetched_at: number;
+}
+
+export async function fetchIsdbCatalog(
+  device: string,
+  vdom: string = "root",
+  refresh: boolean = false,
+): Promise<IsdbServiceCatalog> {
+  const qs = new URLSearchParams({ device, vdom });
+  if (refresh) qs.set("refresh", "true");
+  const res = await authFetch(
+    `${API_BASE}/api/tools/isdb/catalog?${qs.toString()}`,
+  );
+  if (!res.ok) {
+    let detail = "ISDB catalog fetch failed";
+    try {
+      const body = await res.json();
+      if (typeof body?.detail === "string") detail = body.detail;
+    } catch { /* non-JSON error body */ }
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
 export async function fetchIsdbDevices(): Promise<IsdbDevice[]> {
   const res = await authFetch(`${API_BASE}/api/tools/isdb/devices`);
   if (!res.ok) throw new Error("Failed to fetch managed FortiGates");
