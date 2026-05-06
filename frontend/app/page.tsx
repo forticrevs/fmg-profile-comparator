@@ -399,6 +399,12 @@ export default function Home() {
                 Internet Services
               </button>
               <button
+                onClick={() => router.push("/reference/metadata-variables")}
+                className="text-slate-500 hover:text-cyan-400 transition"
+              >
+                Metadata Vars
+              </button>
+              <button
                 onClick={() => router.push("/reference/local-web-categories")}
                 className="text-slate-500 hover:text-cyan-400 transition"
               >

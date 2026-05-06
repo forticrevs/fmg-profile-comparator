@@ -594,6 +594,21 @@ class FMGClient:
         )
         return data if isinstance(data, list) else []
 
+    async def list_metadata_variables(self) -> list[dict[str, Any]]:
+        """Return the ADOM's FortiManager metadata variables.
+
+        FMG stores these under ``obj/fmg/variable`` with per-device
+        values in each variable's ``dynamic_mapping`` list. The reference
+        router pivots this variable-centric payload into the operator-facing
+        device matrix.
+        """
+        data = await self._call(
+            "get",
+            [{"url": f"/pm/config/adom/{self._adom}/obj/fmg/variable"}],
+            verbose=True,
+        )
+        return data if isinstance(data, list) else []
+
     # ------------------------------------------------------------------
     # Schema / syntax queries
     # ------------------------------------------------------------------

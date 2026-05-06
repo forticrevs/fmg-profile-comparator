@@ -127,7 +127,7 @@ export default function ProfileDashboard({ types, onSelectType }: Props) {
         <div>
           <h3 className="text-lg font-semibold text-white">Reference Catalogs</h3>
           <p className="text-sm text-slate-500">
-            Search the full application, IPS, and DLP catalogs that drive profile entries.
+            Search the application, IPS, DLP, internet-service, and ADOM reference data that drive profile entries.
           </p>
         </div>
 
@@ -190,6 +190,17 @@ export default function ProfileDashboard({ types, onSelectType }: Props) {
             <p className="mt-2 text-sm text-slate-500">
               Browse FortiGuard&apos;s ISDB catalog of SaaS FQDN groups.
               Lookups proxy through a managed FortiGate of your choice.
+            </p>
+          </Link>
+
+          <Link
+            href="/reference/metadata-variables"
+            className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 transition-all duration-200 hover:border-emerald-700 hover:bg-slate-900"
+          >
+            <h4 className="text-base font-semibold text-white">Metadata Variables</h4>
+            <p className="mt-2 text-sm text-slate-500">
+              Review FortiManager device metadata values as a searchable
+              device-by-variable matrix for the active ADOM.
             </p>
           </Link>
 

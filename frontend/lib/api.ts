@@ -225,6 +225,29 @@ export interface ReferenceListResponse {
   items: Record<string, unknown>[];
 }
 
+export interface MetadataVariableRow {
+  device: string;
+  values: Record<string, string>;
+  vdoms: Record<string, string>;
+  set_count: number;
+}
+
+export interface MetadataVariableSummary {
+  name: string;
+  mapped_device_count: number;
+  unique_value_count: number;
+}
+
+export interface MetadataVariablesResponse {
+  reference_type: "metadata-variables";
+  count: number;
+  variable_count: number;
+  device_count: number;
+  variables: string[];
+  variable_summaries: MetadataVariableSummary[];
+  rows: MetadataVariableRow[];
+}
+
 export async function fetchProfileTypes(): Promise<ProfileType[]> {
   const res = await authFetch(`${API_BASE}/api/profiles/types`);
   if (!res.ok) throw new Error("Failed to fetch profile types");
@@ -345,6 +368,15 @@ export async function fetchLocalWebCategories(): Promise<ReferenceListResponse> 
 export async function fetchWebRatingOverrides(): Promise<ReferenceListResponse> {
   const res = await authFetch(`${API_BASE}/api/reference/web-rating-overrides`);
   if (!res.ok) throw new Error("Failed to fetch web rating overrides");
+  return res.json();
+}
+
+export async function fetchMetadataVariables(
+  refresh = false,
+): Promise<MetadataVariablesResponse> {
+  const qs = refresh ? "?refresh=true" : "";
+  const res = await authFetch(`${API_BASE}/api/reference/metadata-variables${qs}`);
+  if (!res.ok) throw new Error("Failed to fetch metadata variables");
   return res.json();
 }
 

@@ -59,3 +59,29 @@ class ReferenceListResponse(BaseModel):
     reference_type: str
     count: int
     items: list[dict[str, Any]]
+
+
+class MetadataVariableRow(BaseModel):
+    """One device row in the metadata-variable matrix."""
+    device: str
+    values: dict[str, str] = Field(default_factory=dict)
+    vdoms: dict[str, str] = Field(default_factory=dict)
+    set_count: int = 0
+
+
+class MetadataVariableSummary(BaseModel):
+    """Per-variable mapping summary for metadata-variable reference views."""
+    name: str
+    mapped_device_count: int
+    unique_value_count: int
+
+
+class MetadataVariablesResponse(BaseModel):
+    """Device-centric pivot of FortiManager metadata variables."""
+    reference_type: str
+    count: int
+    variable_count: int
+    device_count: int
+    variables: list[str]
+    variable_summaries: list[MetadataVariableSummary] = Field(default_factory=list)
+    rows: list[MetadataVariableRow]

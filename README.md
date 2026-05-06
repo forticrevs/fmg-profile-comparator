@@ -77,6 +77,7 @@ Searchable explorers for every FMG reference data source the tool understands.
 | Local Web Categories | `/pm/config/adom/{adom}/obj/webfilter/ftgd-local-cat` | Operator-defined FortiGuard category buckets with audit metadata |
 | Web Rating Overrides | `/pm/config/adom/{adom}/obj/webfilter/ftgd-local-rating` | URL override catalog with resolved category names |
 | Internet Services | FortiGuard ISDB via FMG `/sys/proxy/json` → FortiGate | FQDN catalog, full service directory, IP/FQDN lookup |
+| Metadata Variables | `/pm/config/adom/{adom}/obj/fmg/variable` | Device-by-variable matrix with search, sorting, AI context, and CSV export |
 
 #### Signature encyclopedia hover (IPS + Application)
 
@@ -385,6 +386,7 @@ FMG instance bound to the session via `POST /api/auth/connect-fmg`.
 | `GET` | `/api/reference/dlp-data-types` | DLP data-type catalog |
 | `GET` | `/api/reference/local-web-categories` | Custom web category catalog |
 | `GET` | `/api/reference/web-rating-overrides` | FortiGuard URL override catalog |
+| `GET` | `/api/reference/metadata-variables[?refresh=true]` | Metadata variables pivoted into device rows |
 
 ### Chat & AI providers (optional)
 | Method | Path | Purpose |

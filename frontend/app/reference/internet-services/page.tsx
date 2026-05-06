@@ -248,6 +248,7 @@ function summarizeServiceEntry(entry: IsdbServiceEntry) {
     ip_range: formatIpRange(entry.ip_range),
     ports: (entry.port ?? []).map(formatPort),
     country_id: entry.country_id,
+    country: countryLabel(entry.country_id),
     reputation: entry.reputation,
     popularity: entry.popularity,
   };
@@ -310,6 +311,63 @@ const PROTO_NAMES: Record<number, string> = {
   58: "ICMPv6",
   132: "SCTP",
 };
+
+// FortiOS ISDB service-detail entries report countries as ISO 3166-1
+// numeric codes. Keep the map compact and let Intl render localized
+// country names from the alpha-2 code.
+const ISO_NUMERIC_TO_ALPHA2 =
+  "004:AF|008:AL|010:AQ|012:DZ|016:AS|020:AD|024:AO|028:AG|031:AZ|032:AR|036:AU|" +
+  "040:AT|044:BS|048:BH|050:BD|051:AM|052:BB|056:BE|060:BM|064:BT|068:BO|070:BA|" +
+  "072:BW|074:BV|076:BR|084:BZ|086:IO|090:SB|092:VG|096:BN|100:BG|104:MM|108:BI|" +
+  "112:BY|116:KH|120:CM|124:CA|132:CV|136:KY|140:CF|144:LK|148:TD|152:CL|156:CN|" +
+  "158:TW|162:CX|166:CC|170:CO|174:KM|175:YT|178:CG|180:CD|184:CK|188:CR|191:HR|" +
+  "192:CU|196:CY|203:CZ|204:BJ|208:DK|212:DM|214:DO|218:EC|222:SV|226:GQ|231:ET|" +
+  "232:ER|233:EE|234:FO|238:FK|239:GS|242:FJ|246:FI|248:AX|250:FR|254:GF|258:PF|" +
+  "260:TF|262:DJ|266:GA|268:GE|270:GM|275:PS|276:DE|288:GH|292:GI|296:KI|300:GR|" +
+  "304:GL|308:GD|312:GP|316:GU|320:GT|324:GN|328:GY|332:HT|334:HM|336:VA|340:HN|" +
+  "344:HK|348:HU|352:IS|356:IN|360:ID|364:IR|368:IQ|372:IE|376:IL|380:IT|384:CI|" +
+  "388:JM|392:JP|398:KZ|400:JO|404:KE|408:KP|410:KR|414:KW|417:KG|418:LA|422:LB|" +
+  "426:LS|428:LV|430:LR|434:LY|438:LI|440:LT|442:LU|446:MO|450:MG|454:MW|458:MY|" +
+  "462:MV|466:ML|470:MT|474:MQ|478:MR|480:MU|484:MX|492:MC|496:MN|498:MD|499:ME|" +
+  "500:MS|504:MA|508:MZ|512:OM|516:NA|520:NR|524:NP|528:NL|531:CW|533:AW|534:SX|" +
+  "535:BQ|540:NC|548:VU|554:NZ|558:NI|562:NE|566:NG|570:NU|574:NF|578:NO|580:MP|" +
+  "581:UM|583:FM|584:MH|585:PW|586:PK|591:PA|598:PG|600:PY|604:PE|608:PH|612:PN|" +
+  "616:PL|620:PT|624:GW|626:TL|630:PR|634:QA|638:RE|642:RO|643:RU|646:RW|652:BL|" +
+  "654:SH|659:KN|660:AI|662:LC|663:MF|666:PM|670:VC|674:SM|678:ST|682:SA|686:SN|" +
+  "688:RS|690:SC|694:SL|702:SG|703:SK|704:VN|705:SI|706:SO|710:ZA|716:ZW|724:ES|" +
+  "728:SS|729:SD|732:EH|740:SR|744:SJ|748:SZ|752:SE|756:CH|760:SY|762:TJ|764:TH|" +
+  "768:TG|772:TK|776:TO|780:TT|784:AE|788:TN|792:TR|795:TM|796:TC|798:TV|800:UG|" +
+  "804:UA|807:MK|818:EG|826:GB|831:GG|832:JE|833:IM|834:TZ|840:US|850:VI|854:BF|" +
+  "858:UY|860:UZ|862:VE|876:WF|882:WS|887:YE|894:ZM";
+
+const COUNTRY_ALPHA2_BY_NUMERIC = new Map(
+  ISO_NUMERIC_TO_ALPHA2.split("|").map((pair) => {
+    const [numeric, alpha2] = pair.split(":");
+    return [Number(numeric), alpha2] as const;
+  }),
+);
+
+const REGION_DISPLAY_NAMES =
+  typeof Intl !== "undefined" && "DisplayNames" in Intl
+    ? new Intl.DisplayNames(["en"], { type: "region" })
+    : null;
+
+function countryLabel(countryId: number | null | undefined): string | null {
+  if (
+    typeof countryId !== "number" ||
+    countryId <= 0 ||
+    countryId === 65535
+  ) {
+    return null;
+  }
+  const alpha2 = COUNTRY_ALPHA2_BY_NUMERIC.get(countryId);
+  if (!alpha2) return `ID ${countryId}`;
+  try {
+    return REGION_DISPLAY_NAMES?.of(alpha2) ?? alpha2;
+  } catch {
+    return alpha2;
+  }
+}
 
 function formatPort(p: { start_port: number; end_port: number }): string {
   return p.start_port === p.end_port
@@ -699,6 +757,25 @@ function Th({ children, className = "" }: { children: ReactNode; className?: str
   );
 }
 
+function CountryCell({
+  countryId,
+}: {
+  countryId: number | null | undefined;
+}) {
+  const label = countryLabel(countryId);
+  if (!label) {
+    return <span className="text-slate-600">—</span>;
+  }
+  return (
+    <span
+      className="text-slate-300"
+      title={`country_id ${countryId}`}
+    >
+      {label}
+    </span>
+  );
+}
+
 function ServiceEntryTable({
   detail,
   onLoadMore,
@@ -738,7 +815,7 @@ function ServiceEntryTable({
                 <th className="px-2 py-1.5 text-left text-[9px] font-semibold uppercase tracking-wider text-slate-500">
                   Ports
                 </th>
-                <th className="w-16 px-2 py-1.5 text-left text-[9px] font-semibold uppercase tracking-wider text-slate-500">
+                <th className="w-32 px-2 py-1.5 text-left text-[9px] font-semibold uppercase tracking-wider text-slate-500">
                   Country
                 </th>
                 <th className="w-20 px-2 py-1.5 text-left text-[9px] font-semibold uppercase tracking-wider text-slate-500">
@@ -764,8 +841,8 @@ function ServiceEntryTable({
                   <td className="px-2 py-1 font-mono text-slate-300">
                     {entry.port.map(formatPort).join(", ")}
                   </td>
-                  <td className="px-2 py-1 tabular-nums text-slate-400">
-                    {entry.country_id}
+                  <td className="px-2 py-1 text-slate-400">
+                    <CountryCell countryId={entry.country_id} />
                   </td>
                   <td className="px-2 py-1">
                     <ReputationPips value={entry.reputation} />
@@ -909,6 +986,7 @@ export default function InternetServicesPage(): ReactNode {
   const [catalog, setCatalog] = useState<IsdbFqdnCatalog | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [fqdnCatalogExpanded, setFqdnCatalogExpanded] = useState(true);
 
   // ISDB service catalog — full list of internet services
   const [svcCatalog, setSvcCatalog] = useState<IsdbServiceCatalog | null>(null);
@@ -1269,6 +1347,7 @@ export default function InternetServicesPage(): ReactNode {
           loaded: !!catalog,
           loading: catalogLoading,
           error: catalogError,
+          expanded: fqdnCatalogExpanded,
           group_count: catalog?.group_count ?? 0,
           fqdn_count: catalog?.fqdn_count ?? 0,
           search,
@@ -1317,6 +1396,7 @@ export default function InternetServicesPage(): ReactNode {
     devices,
     devicesLoading,
     filteredRows,
+    fqdnCatalogExpanded,
     lookupError,
     lookupLoading,
     lookupTargets,
@@ -1527,87 +1607,101 @@ export default function InternetServicesPage(): ReactNode {
         </section>
 
         {/* FQDN catalog section header */}
-        <div className="flex items-baseline justify-between">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
-            FQDN catalog
-          </h2>
+        <div className="flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={() => setFqdnCatalogExpanded((open) => !open)}
+            aria-expanded={fqdnCatalogExpanded}
+            className="inline-flex items-center gap-2 text-left text-sm font-semibold uppercase tracking-wide text-slate-400 transition hover:text-cyan-300"
+          >
+            <span
+              className={`text-[10px] text-slate-500 transition-transform ${fqdnCatalogExpanded ? "rotate-90" : ""}`}
+            >
+              ▶
+            </span>
+            <span>FQDN catalog</span>
+          </button>
           <div className="text-[10px] text-slate-600">
             FortiGuard SaaS FQDN groups
           </div>
         </div>
 
-        {/* Toolbar */}
-        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-800 bg-slate-900/40 p-3">
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search groups, vendors, or FQDNs…"
-            className="w-72 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/60 focus:outline-none"
-          />
-          <button
-            type="button"
-            onClick={handleRefresh}
-            disabled={!selectedDevice || catalogLoading}
-            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-300 transition hover:border-cyan-600/60 hover:text-cyan-300 disabled:cursor-not-allowed disabled:opacity-40"
-            title="Bypass cache and re-fetch from FMG"
-          >
-            {catalogLoading ? "Refreshing…" : "Refresh"}
-          </button>
-          {catalog && (
-            <div className="ml-auto text-xs tabular-nums text-slate-500">
-              <span className="text-slate-300">
-                {filteredRows.length}
-              </span>{" "}
-              of {catalog.group_count} groups ·{" "}
-              <span className="text-slate-300">{totalFqdnsInView}</span>{" "}
-              FQDNs shown{" "}
-              {catalog.cached && (
-                <span
-                  className="ml-2 inline-flex items-center rounded border border-slate-800 bg-slate-950 px-1.5 py-0.5 text-[10px] font-mono uppercase text-slate-500"
-                  title="Served from backend cache"
-                >
-                  cache
-                </span>
+        {fqdnCatalogExpanded && (
+          <>
+            {/* Toolbar */}
+            <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-800 bg-slate-900/40 p-3">
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search groups, vendors, or FQDNs…"
+                className="w-72 flex-1 rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 focus:border-cyan-500/60 focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={handleRefresh}
+                disabled={!selectedDevice || catalogLoading}
+                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-300 transition hover:border-cyan-600/60 hover:text-cyan-300 disabled:cursor-not-allowed disabled:opacity-40"
+                title="Bypass cache and re-fetch from FMG"
+              >
+                {catalogLoading ? "Refreshing…" : "Refresh"}
+              </button>
+              {catalog && (
+                <div className="ml-auto text-xs tabular-nums text-slate-500">
+                  <span className="text-slate-300">
+                    {filteredRows.length}
+                  </span>{" "}
+                  of {catalog.group_count} groups ·{" "}
+                  <span className="text-slate-300">{totalFqdnsInView}</span>{" "}
+                  FQDNs shown{" "}
+                  {catalog.cached && (
+                    <span
+                      className="ml-2 inline-flex items-center rounded border border-slate-800 bg-slate-950 px-1.5 py-0.5 text-[10px] font-mono uppercase text-slate-500"
+                      title="Served from backend cache"
+                    >
+                      cache
+                    </span>
+                  )}
+                </div>
               )}
             </div>
-          )}
-        </div>
 
-        {/* Errors / empty states */}
-        {catalogError && (
-          <div className="rounded-xl border border-red-900/60 bg-red-950/40 px-4 py-3 text-sm text-red-200">
-            {catalogError}
-          </div>
-        )}
-
-        {!selectedDevice && !devicesLoading && !devicesError && (
-          <div className="rounded-xl border border-dashed border-slate-800 bg-slate-900/20 px-6 py-16 text-center text-sm text-slate-500">
-            Select a FortiGate from the header to proxy your ISDB lookups.
-          </div>
-        )}
-
-        {/* Catalog grid */}
-        {selectedDevice && !catalogError && (
-          <>
-            {catalogLoading && !catalog ? (
-              <div className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-12 text-sm text-slate-400">
-                <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-700 border-t-cyan-400" />
-                Fetching FQDN catalog from {selectedDevice}…
+            {/* Errors / empty states */}
+            {catalogError && (
+              <div className="rounded-xl border border-red-900/60 bg-red-950/40 px-4 py-3 text-sm text-red-200">
+                {catalogError}
               </div>
-            ) : catalog ? (
-              <DataGrid
-                columns={columns}
-                rows={filteredRows}
-                rowKey={(r) => r.name}
-                clampLines={2}
-                emptyState={
-                  search
-                    ? "No groups or FQDNs match your search."
-                    : "The catalog is empty. Is FortiGuard ISDB licensed on this device?"
-                }
-              />
-            ) : null}
+            )}
+
+            {!selectedDevice && !devicesLoading && !devicesError && (
+              <div className="rounded-xl border border-dashed border-slate-800 bg-slate-900/20 px-6 py-16 text-center text-sm text-slate-500">
+                Select a FortiGate from the header to proxy your ISDB lookups.
+              </div>
+            )}
+
+            {/* Catalog grid */}
+            {selectedDevice && !catalogError && (
+              <>
+                {catalogLoading && !catalog ? (
+                  <div className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-12 text-sm text-slate-400">
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-700 border-t-cyan-400" />
+                    Fetching FQDN catalog from {selectedDevice}…
+                  </div>
+                ) : catalog ? (
+                  <DataGrid
+                    columns={columns}
+                    rows={filteredRows}
+                    rowKey={(r) => r.name}
+                    clampLines={2}
+                    emptyState={
+                      search
+                        ? "No groups or FQDNs match your search."
+                        : "The catalog is empty. Is FortiGuard ISDB licensed on this device?"
+                    }
+                  />
+                ) : null}
+              </>
+            )}
           </>
         )}
 
@@ -1788,7 +1882,7 @@ export default function InternetServicesPage(): ReactNode {
                                         {(entry.port ?? []).map(formatPort).join(", ") || "—"}
                                       </td>
                                       <td className="px-2 py-1.5 text-slate-400">
-                                        {entry.country_id || "—"}
+                                        <CountryCell countryId={entry.country_id} />
                                       </td>
                                       <td className="px-2 py-1.5">
                                         <ReputationPips value={entry.reputation} />
