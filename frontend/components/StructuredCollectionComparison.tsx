@@ -333,6 +333,8 @@ function matchEntries(
 // NestedObjectTable — render an array-of-objects (e.g. SD-WAN sla list,
 // nested DLP entries) as a compact table inside a parent row's cell.
 // ---------------------------------------------------------------------------
+const NESTED_TABLE_COLUMN_LIMIT = 5;
+
 function NestedObjectTable({ rows }: { rows: Record<string, unknown>[] }) {
   // Collect every column from every row, hiding identifier noise.
   const columns = useMemo(() => {
@@ -345,49 +347,97 @@ function NestedObjectTable({ rows }: { rows: Record<string, unknown>[] }) {
     return sortEntryKeys([...seen]);
   }, [rows]);
 
+  if (columns.length > NESTED_TABLE_COLUMN_LIMIT) {
+    return (
+      <div className="rounded-md border border-slate-700/50 bg-slate-950/40 overflow-hidden scc-fade-in">
+        <div className="divide-y divide-slate-800/60">
+          {rows.map((row, i) => (
+            <div key={i} className="px-2 py-2">
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+                  Entry {i + 1}
+                </span>
+                {row.id !== undefined && row.id !== null && (
+                  <span className="rounded border border-slate-800 bg-slate-900/70 px-1.5 py-px font-mono text-[10px] text-slate-500">
+                    id {formatValue(row.id)}
+                  </span>
+                )}
+              </div>
+              <dl className="grid grid-cols-1 gap-x-3 gap-y-1.5 sm:grid-cols-2">
+                {columns.map((col) => {
+                  const cell = row[col];
+                  const display = formatValue(cell);
+                  return (
+                    <div key={col} className="min-w-0">
+                      <dt className="text-[9px] font-semibold uppercase tracking-wide text-slate-600">
+                        {humanizeKey(col)}
+                      </dt>
+                      <dd className="mt-0.5 min-w-0 text-[11px] leading-4 text-slate-300 break-words">
+                        {isActionKey(col) ? (
+                          <ActionBadge value={display} />
+                        ) : (
+                          display
+                        )}
+                      </dd>
+                    </div>
+                  );
+                })}
+              </dl>
+            </div>
+          ))}
+        </div>
+        <div className="px-2 py-0.5 text-[10px] text-slate-600 bg-slate-900/40 border-t border-slate-800/30">
+          {rows.length} {rows.length === 1 ? "entry" : "entries"}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="rounded-md border border-slate-700/50 overflow-hidden scc-fade-in">
-      <table className="w-full text-[11px] border-collapse">
-        <thead>
-          <tr className="bg-slate-800/60">
-            {columns.map((col) => (
-              <th
-                key={col}
-                className="px-1.5 py-1 text-left font-semibold uppercase tracking-wide text-slate-500 border-b border-slate-700/40 text-[10px] whitespace-nowrap"
+      <div className="overflow-x-auto">
+        <table className="min-w-max text-[11px] border-collapse">
+          <thead>
+            <tr className="bg-slate-800/60">
+              {columns.map((col) => (
+                <th
+                  key={col}
+                  className="px-1.5 py-1 text-left font-semibold uppercase tracking-wide text-slate-500 border-b border-slate-700/40 text-[10px] whitespace-nowrap"
+                >
+                  {humanizeKey(col)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => (
+              <tr
+                key={i}
+                className="border-b border-slate-800/40 last:border-0 hover:bg-slate-800/20"
               >
-                {humanizeKey(col)}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, i) => (
-            <tr
-              key={i}
-              className="border-b border-slate-800/40 last:border-0 hover:bg-slate-800/20"
-            >
-              {columns.map((col) => {
-                const cell = row[col];
-                if (isActionKey(col)) {
+                {columns.map((col) => {
+                  const cell = row[col];
+                  if (isActionKey(col)) {
+                    return (
+                      <td key={col} className="px-1.5 py-1 align-top">
+                        <ActionBadge value={formatValue(cell)} />
+                      </td>
+                    );
+                  }
                   return (
-                    <td key={col} className="px-1.5 py-1 align-top">
-                      <ActionBadge value={formatValue(cell)} />
+                    <td
+                      key={col}
+                      className="px-1.5 py-1 align-top text-slate-300 break-words"
+                    >
+                      {formatValue(cell)}
                     </td>
                   );
-                }
-                return (
-                  <td
-                    key={col}
-                    className="px-1.5 py-1 align-top text-slate-300 break-words"
-                  >
-                    {formatValue(cell)}
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <div className="px-1.5 py-0.5 text-[10px] text-slate-600 bg-slate-900/40 border-t border-slate-800/30">
         {rows.length} {rows.length === 1 ? "entry" : "entries"}
       </div>
