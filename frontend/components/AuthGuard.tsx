@@ -24,6 +24,8 @@ export default function AuthGuard({ children }: AuthGuardProps) {
       return;
     }
 
+    setChecked(false);
+    let cancelled = false;
     const token = localStorage.getItem("fmg_token");
     if (!token) {
       router.replace("/login");
@@ -31,6 +33,7 @@ export default function AuthGuard({ children }: AuthGuardProps) {
     }
 
     verifySession().then((result) => {
+      if (cancelled) return;
       if (!result.valid) {
         localStorage.removeItem("fmg_token");
         localStorage.removeItem("fmg_user");
@@ -43,6 +46,10 @@ export default function AuthGuard({ children }: AuthGuardProps) {
         setChecked(true);
       }
     });
+
+    return () => {
+      cancelled = true;
+    };
   }, [pathname, router]);
 
   if (!checked && pathname !== "/login") {

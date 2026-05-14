@@ -1,4 +1,11 @@
-export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+function resolveApiBase(): string {
+  const configured = process.env.NEXT_PUBLIC_API_URL?.trim();
+  if (configured) return configured.replace(/\/+$/, "");
+
+  return "";
+}
+
+export const API_BASE = resolveApiBase();
 
 // ---------------------------------------------------------------------------
 // Auth helpers
