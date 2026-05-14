@@ -7,6 +7,7 @@ const backendApiUrl = (
 ).replace(/\/+$/, "");
 
 const nextConfig: NextConfig = {
+  allowedDevOrigins: ["10.224.128.69"],
   async rewrites() {
     return [
       {

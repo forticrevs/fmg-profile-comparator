@@ -868,6 +868,268 @@ export async function submitDiffCompare(
 }
 
 // ---------------------------------------------------------------------------
+// Tools — Object migration comparison
+// ---------------------------------------------------------------------------
+
+export interface ObjectMigrationFamily {
+  id: string;
+  label: string;
+}
+
+export interface ObjectMigrationDiff {
+  path: string;
+  source: unknown;
+  fmg: unknown;
+}
+
+export type ObjectMigrationStatus =
+  | "match"
+  | "missing"
+  | "conflict"
+  | "duplicate-source";
+
+export interface ObjectMigrationRow {
+  key: string;
+  status: ObjectMigrationStatus;
+  source: Record<string, unknown>;
+  fmg: Record<string, unknown> | null;
+  diffs: ObjectMigrationDiff[];
+  duplicate_count: number;
+}
+
+export interface ObjectMigrationFamilyResult {
+  id: string;
+  label: string;
+  source_count: number;
+  fmg_count: number;
+  matched: number;
+  missing: number;
+  conflicts: number;
+  duplicates: number;
+  duplicate_keys: string[];
+  results: ObjectMigrationRow[];
+  error: string | null;
+}
+
+export interface ObjectMigrationCompareResult {
+  adom: string;
+  summary: {
+    source: number;
+    fmg: number;
+    matched: number;
+    missing: number;
+    conflicts: number;
+    duplicates: number;
+    errors: number;
+  };
+  families: ObjectMigrationFamilyResult[];
+}
+
+export async function fetchObjectMigrationFamilies(): Promise<ObjectMigrationFamily[]> {
+  const res = await authFetch(`${API_BASE}/api/tools/object-migration/families`);
+  if (!res.ok) throw new Error("Failed to fetch object families");
+  const data = await res.json();
+  return data.families ?? [];
+}
+
+export async function compareObjectMigrationConfig(
+  configText: string,
+  families: string[],
+  includeMatches: boolean,
+): Promise<ObjectMigrationCompareResult> {
+  const res = await authFetch(`${API_BASE}/api/tools/object-migration/compare`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      config_text: configText,
+      families,
+      include_matches: includeMatches,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || "Object comparison failed");
+  }
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Tools — FortiManager Jinja template lab
+// ---------------------------------------------------------------------------
+
+export interface JinjaLabTemplate {
+  id: string;
+  name: string;
+  description: string;
+  content: string;
+  type: string;
+  target: string;
+  source: string;
+  fmg_name: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface JinjaLabGroup {
+  id: string;
+  name: string;
+  description: string;
+  template_ids: string[];
+  created_at: number;
+  updated_at: number;
+}
+
+export interface JinjaLabDevice {
+  name: string;
+  hostname?: string | null;
+  serial?: string | null;
+  platform?: string | null;
+  version?: string | null;
+  ip?: string | null;
+  os_type?: string | null;
+  conn_status?: string | null;
+}
+
+export interface JinjaLabFmgTemplate {
+  source: string;
+  url: string;
+  name: string;
+  description: string;
+  type: string;
+  target: string;
+  content: string;
+  raw: Record<string, unknown>;
+}
+
+export interface JinjaLabReference {
+  predefined_variables: { name: string; description: string; example?: string }[];
+  interface_variables: { name: string; description: string }[];
+  filters: string[];
+  strict_undefined: boolean;
+  notes: string[];
+}
+
+export interface JinjaLabRenderError {
+  type: string;
+  message: string;
+  lineno?: number | null;
+  template?: string | null;
+}
+
+export interface JinjaLabRenderSection {
+  name: string;
+  rendered: string;
+  ok: boolean;
+}
+
+export interface JinjaLabRenderResult {
+  ok: boolean;
+  device: string;
+  rendered: string;
+  sections: JinjaLabRenderSection[];
+  errors: JinjaLabRenderError[];
+  variables: string[];
+  referenced_templates: string[];
+  missing_variables: string[];
+  context_preview: Record<string, unknown>;
+}
+
+export async function fetchJinjaLabReference(): Promise<JinjaLabReference> {
+  const res = await authFetch(`${API_BASE}/api/tools/jinja-lab/reference`);
+  if (!res.ok) throw new Error("Failed to fetch Jinja reference");
+  return res.json();
+}
+
+export async function fetchJinjaLabDevices(): Promise<JinjaLabDevice[]> {
+  const res = await authFetch(`${API_BASE}/api/tools/jinja-lab/devices`);
+  if (!res.ok) throw new Error("Failed to fetch devices");
+  const data = await res.json();
+  return data.devices ?? [];
+}
+
+export async function fetchFmgJinjaTemplates(): Promise<{
+  adom: string;
+  templates: JinjaLabFmgTemplate[];
+  errors: { source: string; url: string; error: string }[];
+}> {
+  const res = await authFetch(`${API_BASE}/api/tools/jinja-lab/fmg-templates`);
+  if (!res.ok) throw new Error("Failed to fetch FMG templates");
+  return res.json();
+}
+
+export async function fetchLocalJinjaTemplates(): Promise<JinjaLabTemplate[]> {
+  const res = await authFetch(`${API_BASE}/api/tools/jinja-lab/templates`);
+  if (!res.ok) throw new Error("Failed to fetch local templates");
+  const data = await res.json();
+  return data.templates ?? [];
+}
+
+export async function saveLocalJinjaTemplate(
+  template: Partial<JinjaLabTemplate> & { name: string; content: string },
+): Promise<JinjaLabTemplate> {
+  const res = await authFetch(`${API_BASE}/api/tools/jinja-lab/templates`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(template),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || "Failed to save template");
+  }
+  const data = await res.json();
+  return data.template;
+}
+
+export async function deleteLocalJinjaTemplate(id: string): Promise<void> {
+  const res = await authFetch(`${API_BASE}/api/tools/jinja-lab/templates/${id}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error("Failed to delete template");
+}
+
+export async function fetchLocalJinjaGroups(): Promise<JinjaLabGroup[]> {
+  const res = await authFetch(`${API_BASE}/api/tools/jinja-lab/groups`);
+  if (!res.ok) throw new Error("Failed to fetch local groups");
+  const data = await res.json();
+  return data.groups ?? [];
+}
+
+export async function saveLocalJinjaGroup(
+  group: Partial<JinjaLabGroup> & { name: string; template_ids: string[] },
+): Promise<JinjaLabGroup> {
+  const res = await authFetch(`${API_BASE}/api/tools/jinja-lab/groups`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(group),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || "Failed to save group");
+  }
+  const data = await res.json();
+  return data.group;
+}
+
+export async function renderJinjaTemplate(body: {
+  device: string;
+  content?: string;
+  template_id?: string;
+  template_ids?: string[];
+  extra_vars?: Record<string, unknown>;
+}): Promise<JinjaLabRenderResult> {
+  const res = await authFetch(`${API_BASE}/api/tools/jinja-lab/render`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const payload = await res.json().catch(() => ({}));
+    throw new Error(payload.detail || "Template render failed");
+  }
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
 // Tools — Policy viewer
 // ---------------------------------------------------------------------------
 

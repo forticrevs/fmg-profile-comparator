@@ -18,6 +18,10 @@ export default function AuthGuard({ children }: AuthGuardProps) {
   const [needsSetup, setNeedsSetup] = useState(false);
 
   useEffect(() => {
+    const redirectToLogin = () => {
+      window.location.replace("/login");
+    };
+
     // Skip auth check on login page
     if (pathname === "/login") {
       setChecked(true);
@@ -28,24 +32,31 @@ export default function AuthGuard({ children }: AuthGuardProps) {
     let cancelled = false;
     const token = localStorage.getItem("fmg_token");
     if (!token) {
-      router.replace("/login");
+      redirectToLogin();
       return;
     }
 
-    verifySession().then((result) => {
-      if (cancelled) return;
-      if (!result.valid) {
+    verifySession()
+      .then((result) => {
+        if (cancelled) return;
+        if (!result.valid) {
+          localStorage.removeItem("fmg_token");
+          localStorage.removeItem("fmg_user");
+          redirectToLogin();
+        } else {
+          setUsername(result.username || localStorage.getItem("fmg_user") || "");
+          setActiveInstance(result.activeInstance || null);
+          setInstances(result.instances || []);
+          setNeedsSetup(result.needsSetup || false);
+          setChecked(true);
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
         localStorage.removeItem("fmg_token");
         localStorage.removeItem("fmg_user");
-        router.replace("/login");
-      } else {
-        setUsername(result.username || localStorage.getItem("fmg_user") || "");
-        setActiveInstance(result.activeInstance || null);
-        setInstances(result.instances || []);
-        setNeedsSetup(result.needsSetup || false);
-        setChecked(true);
-      }
-    });
+        redirectToLogin();
+      });
 
     return () => {
       cancelled = true;

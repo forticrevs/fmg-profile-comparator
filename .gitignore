@@ -40,6 +40,7 @@ NEXT_TASK.md
 
 # Sensitive runtime state — never commit
 backend/.fmg_key
+backend/.jwt_secret
 backend/fmg_instances.json
 backend/user_store.json
 backend/pin_store.json

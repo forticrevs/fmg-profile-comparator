@@ -7,6 +7,7 @@ import logging
 import os
 import secrets
 import time
+from pathlib import Path
 from typing import Any
 
 import jwt
@@ -16,8 +17,31 @@ from app.services.fmg_client import FMGClient
 
 logger = logging.getLogger(__name__)
 
-# JWT secret — generated once per process, or from environment
-JWT_SECRET = os.getenv("JWT_SECRET", secrets.token_hex(32))
+_JWT_SECRET_PATH = Path(__file__).resolve().parents[2] / ".jwt_secret"
+
+
+def _load_jwt_secret() -> str:
+    configured = os.getenv("JWT_SECRET")
+    if configured:
+        return configured
+
+    try:
+        if _JWT_SECRET_PATH.exists():
+            saved = _JWT_SECRET_PATH.read_text(encoding="utf-8").strip()
+            if saved:
+                return saved
+
+        generated = secrets.token_hex(32)
+        _JWT_SECRET_PATH.write_text(generated, encoding="utf-8")
+        _JWT_SECRET_PATH.chmod(0o600)
+        return generated
+    except OSError:
+        logger.warning("Falling back to process-local JWT secret")
+        return secrets.token_hex(32)
+
+
+# JWT secret: environment override, otherwise stable local ignored file.
+JWT_SECRET = _load_jwt_secret()
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_SECONDS = 3600 * 8  # 8 hours
 
@@ -69,11 +93,28 @@ def decode_token(token: str) -> dict[str, Any]:
 
 
 def get_session(token: str) -> dict[str, Any]:
-    """Return the full session dict for a valid JWT."""
+    """Return the full session dict for a valid JWT.
+
+    Dev reloads restart the Python process and clear the in-memory session
+    map. The signed JWT is still authoritative for local auth, so rebuild a
+    lightweight session when that happens; FMG connections can be reselected
+    after the app loads.
+    """
+    payload = decode_token(token)
     tid = _token_id(token)
     session = _sessions.get(tid)
     if not session:
-        raise ValueError("Session not found — please login again")
+        username = payload.get("sub", "")
+        if not username:
+            raise ValueError("Invalid session token")
+        session = {
+            "username": username,
+            "created": payload.get("iat", time.time()),
+            "fmg_clients": {},
+            "active_instance": None,
+        }
+        _sessions[tid] = session
+        logger.info(f"Rehydrated local session for {username}")
     return session
 
 

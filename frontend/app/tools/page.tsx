@@ -21,7 +21,7 @@ export default function ToolsPage() {
 
         <section className="space-y-3">
           <h2 className="text-base font-semibold text-slate-300">
-            Palo Alto → Fortinet
+            Migration Utilities
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <Link
@@ -37,6 +37,47 @@ export default function ToolsPage() {
                 application groups, custom URL categories, URL filter
                 profiles, SSL decryption rules, and wildcard address objects
                 converted to FortiGate CLI.
+              </p>
+              <span className="mt-3 inline-block text-[10px] uppercase tracking-wide text-cyan-500">
+                Open tool →
+              </span>
+            </Link>
+            <Link
+              href="/tools/object-migration"
+              className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 hover:border-cyan-500/40 hover:bg-cyan-500/5 transition group"
+            >
+              <h3 className="text-sm font-semibold text-slate-200 group-hover:text-cyan-300">
+                Object migration compare
+              </h3>
+              <p className="mt-2 text-xs text-slate-500 leading-relaxed">
+                Compare FortiConverter or FortiGate CLI object blocks against
+                existing objects in the active FortiManager ADOM before
+                importing migrated address, service, URL filter, SSL
+                exemption, and local web category data.
+              </p>
+              <span className="mt-3 inline-block text-[10px] uppercase tracking-wide text-cyan-500">
+                Open tool →
+              </span>
+            </Link>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-base font-semibold text-slate-300">
+            Provisioning Utilities
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Link
+              href="/tools/jinja-lab"
+              className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 hover:border-cyan-500/40 hover:bg-cyan-500/5 transition group"
+            >
+              <h3 className="text-sm font-semibold text-slate-200 group-hover:text-cyan-300">
+                Jinja CLI template lab
+              </h3>
+              <p className="mt-2 text-xs text-slate-500 leading-relaxed">
+                Import FMG Jinja scripts/templates as local editable copies,
+                author new CLI templates, and render previews against live
+                device database, interface, and metadata-variable context.
               </p>
               <span className="mt-3 inline-block text-[10px] uppercase tracking-wide text-cyan-500">
                 Open tool →
@@ -109,36 +150,7 @@ export default function ToolsPage() {
           </div>
         </section>
 
-        <section className="space-y-3">
-          <h2 className="text-base font-semibold text-slate-300">Coming soon</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <PlaceholderCard
-              title="More vendors"
-              description="Cisco ASA / FTD, Check Point, and other vendor parsers will live here as the tooling is ported in."
-            />
-          </div>
-        </section>
       </div>
     </main>
-  );
-}
-
-function PlaceholderCard({
-  title,
-  description,
-}: {
-  title: string;
-  description: string;
-}) {
-  return (
-    <div className="rounded-xl border border-dashed border-slate-800 bg-slate-900/40 p-5">
-      <h3 className="text-sm font-semibold text-slate-300">{title}</h3>
-      <p className="mt-2 text-xs text-slate-500 leading-relaxed">
-        {description}
-      </p>
-      <span className="mt-3 inline-block text-[10px] uppercase tracking-wide text-slate-700">
-        Placeholder
-      </span>
-    </div>
   );
 }

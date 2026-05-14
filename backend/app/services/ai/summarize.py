@@ -17,6 +17,7 @@ PER_ITEM_JSON_BYTES = 3_000
 TOTAL_BLOCK_BYTES = 12_000
 MAX_STRING_LEN = 300
 MAX_ARRAY_LEN = 20
+MAX_TEMPLATE_STRING_LEN = 3_000
 
 # Fields that are almost never useful in an LLM prompt — dropped eagerly
 # when the per-item JSON is still over budget after generic truncation.
@@ -32,6 +33,9 @@ BULKY_FIELDS = {
   "_raw",
   "metadata",
 }
+
+TEMPLATE_CONTEXT_KINDS = {"jinja_template", "jinja_template_lab"}
+TEMPLATE_FIELDS = {"content", "rendered", "rendered_preview", "template"}
 
 
 def _truncate_str(s: str) -> str:
@@ -51,6 +55,28 @@ def _compress(value: Any) -> Any:
     return compressed
   if isinstance(value, dict):
     return {k: _compress(v) for k, v in value.items()}
+  return value
+
+
+def _compress_template_context(value: Any) -> Any:
+  """Compress Jinja template context while preserving useful code bodies."""
+  if isinstance(value, str):
+    if len(value) <= MAX_TEMPLATE_STRING_LEN:
+      return value
+    return value[:MAX_TEMPLATE_STRING_LEN] + f"… [+{len(value) - MAX_TEMPLATE_STRING_LEN} chars]"
+  if isinstance(value, list):
+    compressed = [_compress_template_context(v) for v in value[:MAX_ARRAY_LEN]]
+    if len(value) > MAX_ARRAY_LEN:
+      compressed.append(f"… [{len(value) - MAX_ARRAY_LEN} more]")
+    return compressed
+  if isinstance(value, dict):
+    out: dict[str, Any] = {}
+    for k, v in value.items():
+      if k in TEMPLATE_FIELDS and isinstance(v, str):
+        out[k] = _compress_template_context(v)
+      else:
+        out[k] = _compress(v)
+    return out
   return value
 
 
@@ -78,7 +104,11 @@ def _compress_item_data(data: Any) -> Any:
 def _render_item(item: dict[str, Any]) -> str:
   kind = item.get("kind") or "item"
   label = item.get("label") or "(unlabeled)"
-  data = _compress_item_data(item.get("data"))
+  data = (
+    _compress_template_context(item.get("data"))
+    if kind in TEMPLATE_CONTEXT_KINDS
+    else _compress_item_data(item.get("data"))
+  )
   body = json.dumps(data, indent=2, default=str)
   if len(body) > PER_ITEM_JSON_BYTES:
     body = body[:PER_ITEM_JSON_BYTES] + "\n… [truncated]"
@@ -88,7 +118,11 @@ def _render_item(item: dict[str, Any]) -> str:
 def _render_page(page: dict[str, Any]) -> str:
   kind = page.get("kind") or "current_page"
   label = page.get("label") or "(current page)"
-  data = _compress_item_data(page.get("data"))
+  data = (
+    _compress_template_context(page.get("data"))
+    if kind in TEMPLATE_CONTEXT_KINDS
+    else _compress_item_data(page.get("data"))
+  )
   body = json.dumps(data, indent=2, default=str)
   if len(body) > PER_ITEM_JSON_BYTES:
     body = body[:PER_ITEM_JSON_BYTES] + "\n… [truncated]"
