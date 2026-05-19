@@ -2,6 +2,12 @@ function resolveApiBase(): string {
   const configured = process.env.NEXT_PUBLIC_API_URL?.trim();
   if (configured) return configured.replace(/\/+$/, "");
 
+  if (typeof window !== "undefined") {
+    const { protocol, hostname } = window.location;
+    const apiHost = hostname || "127.0.0.1";
+    return `${protocol}//${apiHost}:8000`;
+  }
+
   return "";
 }
 
@@ -908,6 +914,9 @@ export interface ObjectMigrationFamilyResult {
   duplicates: number;
   duplicate_keys: string[];
   results: ObjectMigrationRow[];
+  returned_count: number;
+  total_visible: number;
+  truncated: boolean;
   error: string | null;
 }
 
@@ -935,7 +944,11 @@ export async function fetchObjectMigrationFamilies(): Promise<ObjectMigrationFam
 export async function compareObjectMigrationConfig(
   configText: string,
   families: string[],
-  includeMatches: boolean,
+  options: {
+    includeMatches?: boolean;
+    resultLimitPerFamily?: number | null;
+    viewFilter?: string | null;
+  } = {},
 ): Promise<ObjectMigrationCompareResult> {
   const res = await authFetch(`${API_BASE}/api/tools/object-migration/compare`, {
     method: "POST",
@@ -943,12 +956,129 @@ export async function compareObjectMigrationConfig(
     body: JSON.stringify({
       config_text: configText,
       families,
-      include_matches: includeMatches,
+      include_matches: options.includeMatches ?? false,
+      result_limit_per_family: options.resultLimitPerFamily ?? 100,
+      view_filter: options.viewFilter ?? null,
     }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail || "Object comparison failed");
+  }
+  return res.json();
+}
+
+export async function exportObjectMigrationConfig(
+  configText: string,
+  families: string[],
+  format: "json" | "csv",
+): Promise<Blob> {
+  const res = await authFetch(`${API_BASE}/api/tools/object-migration/export`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      config_text: configText,
+      families,
+      format,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || "Object comparison export failed");
+  }
+  return res.blob();
+}
+
+// ---------------------------------------------------------------------------
+// Tools — FortiGate route viewer
+// ---------------------------------------------------------------------------
+
+export interface RouteViewerDevice {
+  name: string;
+  hostname?: string | null;
+  platform?: string | null;
+  os_version?: string | null;
+  ip?: string | null;
+  ha_mode?: string | null;
+  conn_status?: string | null;
+}
+
+export interface RouteViewerRoute {
+  id: string;
+  device: string;
+  vdom: string;
+  index: number;
+  destination: string;
+  destination_raw: string;
+  network: string | null;
+  prefix_length: number | null;
+  ip_version: number | null;
+  is_default: boolean;
+  gateway: string;
+  distance: number | string;
+  metric: number | string;
+  interface: string;
+  type: string;
+  protocol: string;
+  age: number | string;
+  vrf: string;
+  selected?: unknown;
+  flags?: unknown;
+  raw: Record<string, unknown>;
+}
+
+export interface RouteViewerDeviceResult {
+  device: string;
+  vdom: string;
+  count: number;
+  routes: RouteViewerRoute[];
+  cached: boolean;
+  fetched_at: number;
+  version?: string | null;
+  serial?: string | null;
+  error?: string;
+}
+
+export interface RouteViewerResponse {
+  adom: string;
+  vdom: string;
+  device_count: number;
+  route_count: number;
+  devices: RouteViewerDeviceResult[];
+  routes: RouteViewerRoute[];
+  summary: {
+    routes: number;
+    devices: number;
+    devices_with_errors: number;
+    default_routes: number;
+    interfaces: Record<string, number>;
+    protocols: Record<string, number>;
+    types: Record<string, number>;
+    vrfs: Record<string, number>;
+    devices_by_route_count: Record<string, number>;
+  };
+}
+
+export async function fetchRouteViewerDevices(): Promise<RouteViewerDevice[]> {
+  const res = await authFetch(`${API_BASE}/api/tools/routes/devices`);
+  if (!res.ok) throw new Error("Failed to fetch managed FortiGates");
+  const data = await res.json();
+  return data.devices ?? [];
+}
+
+export async function queryRouteViewerRoutes(
+  devices: string[],
+  vdom: string,
+  refresh = false,
+): Promise<RouteViewerResponse> {
+  const res = await authFetch(`${API_BASE}/api/tools/routes/query`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ devices, vdom, refresh }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || "Failed to collect routes");
   }
   return res.json();
 }

@@ -113,8 +113,9 @@ through FMG's `/sys/proxy/json` to a user-selected managed FortiGate.
 ### Optional AI assistant, providers, and RAG
 
 The floating AI assistant is an add-on workflow. Profile comparison,
-reference browsing, ISDB lookup, and the migration tools all work without any
-AI provider, Ollama process, Qdrant database, or RAG corpus.
+reference browsing, ISDB lookup, route viewing, provisioning utilities, and
+the migration tools all work without any AI provider, Ollama process, Qdrant
+database, or RAG corpus.
 
 - **Provider-managed chat.** Settings can store multiple LLM providers and the
   chat widget lets the user choose one per conversation. API keys are encrypted
@@ -143,6 +144,10 @@ Migration utilities and operator conveniences under `/tools`.
 | Tool | Purpose |
 |------|---------|
 | **PAN XML Extract** | Upload a Palo Alto `running-config.xml`, pick extractors, get back CSV / XLSX / FortiGate-CLI artifacts. Self-registering parsers for security rules, profile groups, app groups, custom URL categories, URL filter profiles, SSL decryption rules, and wildcard objects. Runs as an ARQ background job. |
+| **Object migration compare** | Compare FortiConverter/FortiGate object CLI against same-named FMG objects before importing migrated address, address-group, service, service-group, local web category, SSL exemption, URL filter, wildcard FQDN, and wildcard FQDN group data. |
+| **Jinja CLI template lab** | Import FMG CLI scripts/templates as local editable copies, author Jinja2 templates with FortiManager-style variables and filters, and render previews against live device database and metadata-variable context. |
+| **FortiGate route viewer** | Query one or more FMG-managed FortiGates through `/sys/proxy/json` for `/api/v2/monitor/router/ipv4`, then filter and export routes by device, destination, gateway, interface, protocol, route type, VRF, and route class. |
+| **ISDB reference and lookup** | Proxy through a selected FortiGate to browse ISDB FQDN groups, the service catalog, service details, and IP/FQDN enrichment results. |
 | **Diff utility** | Upload up to `N` text / config files (`.txt`, `.conf`, `.cfg`, `.json`, `.xml`, `.yaml`), pick a baseline, see unified diffs. Layered defenses: size caps, extension allow-list, magic-byte sniff, NUL rejection, strict UTF-8, `defusedxml`, `yaml.safe_load`, in-memory only, per-user sliding-window rate limit. |
 | **Policy viewer** | Dense, searchable view of firewall policies for the active ADOM. Schema-driven column discovery, per-column + global search, live hit counts and byte counters with a relative log-scale heatmap, expand-row full-policy detail pane, hover-resolved address/service tooltips, drag-to-reorder columns with persisted widths. |
 | **Policy shadow** | Run the `fmg-policy-shadow` analyzer against one or more packages. Packages picked via regex or explicit list; outputs HTML/XLSX/JSON. Runs as a background ARQ job; artifacts downloaded through the generic job endpoint. |
@@ -172,7 +177,7 @@ per-user job directory, and everything is bundled into a
 │ app/                                                       │
 │   page.tsx                   dashboard + profile picker    │
 │   reference/                 8 catalog explorers           │
-│   tools/                     4 utility surfaces            │
+│   tools/                     7 utility surfaces            │
 │   settings/                  multi-FMG + AI provider CRUD  │
 │   login/                     auth gateway                  │
 │ components/                                                │
@@ -207,6 +212,9 @@ per-user job directory, and everything is bundled into a
 │   tools_policy_viewer   firewall policy browser            │
 │   tools_policy_shadow   policy shadow analyzer runner      │
 │   tools_isdb            ISDB FQDN/catalog/IP proxy         │
+│   tools_routes          FortiGate route table proxy        │
+│   tools_object_migration object migration compare          │
+│   tools_jinja_lab       local Jinja CLI template lab        │
 │ services/                                                  │
 │   fmg_client            JSON-RPC + undocumented CGI client │
 │   fmg_registry          multi-instance (Fernet-encrypted)  │
@@ -214,6 +222,9 @@ per-user job directory, and everything is bundled into a
 │   id_resolver           ID → human-name enrichment         │
 │   policy_fetcher        policy package + hitcount helpers  │
 │   object_resolver       firewall object map (addrs/svcs)   │
+│   route_viewer          FortiGate route normalizer          │
+│   object_migration_compare object compare helpers          │
+│   jinja_template_lab    local template/render helpers       │
 │   schema_cache          FMG syntax schema cache            │
 │   fos_proxy             /sys/proxy/json wrapper            │
 │   diff_engine           unified diff generator             │
@@ -409,6 +420,16 @@ FMG instance bound to the session via `POST /api/auth/connect-fmg`.
 | `POST` | `/api/tools/pan-xml/extract` | Multipart upload → enqueues a `pan_extract` job |
 | `GET` | `/api/tools/diff/limits` | Upload caps + allowed extensions |
 | `POST` | `/api/tools/diff/compare` | Multi-file diff (stateless) |
+| `GET` | `/api/tools/object-migration/families` | Supported migrated-object families |
+| `POST` | `/api/tools/object-migration/compare` | Compare FortiConverter/FortiGate object CLI against active FMG ADOM objects |
+| `POST` | `/api/tools/object-migration/export` | Full JSON/CSV object comparison export |
+| `GET` | `/api/tools/jinja-lab/reference` | FortiManager Jinja variable/filter reference |
+| `GET` | `/api/tools/jinja-lab/devices` | Device database + metadata context for rendering |
+| `GET` / `POST` / `DELETE` | `/api/tools/jinja-lab/templates[/{id}]` | Local template copies and imported FMG scripts/templates |
+| `GET` / `POST` / `DELETE` | `/api/tools/jinja-lab/groups[/{group_id}]` | Local template groups |
+| `POST` | `/api/tools/jinja-lab/render` | Render one template or template group against a device context |
+| `GET` | `/api/tools/routes/devices` | Managed FortiGates available for route-table proxy |
+| `POST` | `/api/tools/routes/query` | Collect IPv4 route tables from selected FortiGates via FMG proxy |
 | `GET` | `/api/tools/policy-viewer/packages` | Policy package list |
 | `GET` | `/api/tools/policy-viewer/schema` | Firewall policy schema |
 | `GET` | `/api/tools/policy-viewer/packages/{pkg}/policies` | Policy entries |
@@ -488,8 +509,8 @@ npm run dev -- --port 3002
 
 Open <http://localhost:3002>, register the first user, then add an FMG
 instance under **Settings** and connect to it. Profile comparison works
-immediately; ISDB lookups additionally require at least one FMG-managed
-FortiGate.
+immediately; ISDB lookups and the route viewer additionally require at least
+one FMG-managed FortiGate reachable through FortiManager proxy.
 
 ### Optional: AI provider setup
 

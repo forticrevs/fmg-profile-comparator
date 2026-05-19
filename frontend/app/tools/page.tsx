@@ -88,6 +88,31 @@ export default function ToolsPage() {
 
         <section className="space-y-3">
           <h2 className="text-base font-semibold text-slate-300">
+            Operational Utilities
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Link
+              href="/tools/routes"
+              className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 hover:border-cyan-500/40 hover:bg-cyan-500/5 transition group"
+            >
+              <h3 className="text-sm font-semibold text-slate-200 group-hover:text-cyan-300">
+                FortiGate route viewer
+              </h3>
+              <p className="mt-2 text-xs text-slate-500 leading-relaxed">
+                Pull IPv4 routing tables from one or more FMG-managed
+                FortiGates through the FortiManager proxy API, then filter by
+                device, destination, gateway, interface, protocol, type, and
+                VRF.
+              </p>
+              <span className="mt-3 inline-block text-[10px] uppercase tracking-wide text-cyan-500">
+                Open tool →
+              </span>
+            </Link>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-base font-semibold text-slate-300">
             Policy inspection
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

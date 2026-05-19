@@ -254,6 +254,14 @@ INT_FIELDS = {
     "protocol-number",
     "rating",
 }
+ROW_FILTERS = {
+    "source",
+    "fmg",
+    "match",
+    "missing",
+    "conflict",
+    "duplicate-source",
+}
 
 
 @dataclass
@@ -358,10 +366,13 @@ async def compare_config_to_fmg(
     *,
     families: list[str] | None = None,
     include_matches: bool = True,
+    row_limit_per_family: int | None = None,
+    view_filter: str | None = None,
 ) -> dict[str, Any]:
     selected_specs = _select_specs(families)
     parsed = parse_fortios_cli(config_text)
     adom = getattr(fmg, "_adom", "root")
+    normalized_filter = view_filter if view_filter in ROW_FILTERS else None
 
     fetched = await asyncio.gather(
         *[_fetch_fmg_family(fmg, adom, spec) for spec in selected_specs],
@@ -379,6 +390,8 @@ async def compare_config_to_fmg(
                 parsed.get(spec.id, []),
                 fmg_result,
                 include_matches=include_matches,
+                row_limit_per_family=row_limit_per_family,
+                view_filter=normalized_filter,
             )
         )
 
@@ -499,11 +512,22 @@ def _compare_family(
     fmg_items: list[dict[str, Any]],
     *,
     include_matches: bool,
+    row_limit_per_family: int | None,
+    view_filter: str | None,
 ) -> dict[str, Any]:
     source_by_key, duplicates = _index_items(spec, source_items, source=True)
     fmg_by_key, _ = _index_items(spec, fmg_items, source=False)
     rows: list[dict[str, Any]] = []
     matched = missing = conflicts = duplicate_count = 0
+    total_visible = 0
+
+    def emit(row: dict[str, Any]) -> None:
+        nonlocal total_visible
+        if not _row_visible(row, include_matches=include_matches, view_filter=view_filter):
+            return
+        total_visible += 1
+        if row_limit_per_family is None or len(rows) < row_limit_per_family:
+            rows.append(row)
 
     for key in sorted(source_by_key, key=str.lower):
         source_group = source_by_key[key]
@@ -525,12 +549,12 @@ def _compare_family(
                 "diffs": [],
                 "duplicate_count": len(source_group),
             }
-            rows.append(row)
+            emit(row)
             continue
 
         if not fmg_obj:
             missing += 1
-            rows.append({
+            emit({
                 "key": key,
                 "status": "missing",
                 "source": source_norm,
@@ -544,7 +568,7 @@ def _compare_family(
         diffs = _diff_values(source_norm, fmg_norm)
         if diffs:
             conflicts += 1
-            rows.append({
+            emit({
                 "key": key,
                 "status": "conflict",
                 "source": source_norm,
@@ -554,8 +578,8 @@ def _compare_family(
             })
         else:
             matched += 1
-            if include_matches:
-                rows.append({
+            if include_matches or view_filter in {"source", "fmg", "match"}:
+                emit({
                     "key": key,
                     "status": "match",
                     "source": source_norm,
@@ -575,6 +599,9 @@ def _compare_family(
         "duplicates": duplicate_count,
         "duplicate_keys": duplicates,
         "results": rows,
+        "returned_count": len(rows),
+        "total_visible": total_visible,
+        "truncated": row_limit_per_family is not None and total_visible > len(rows),
         "error": None,
     }
 
@@ -595,8 +622,26 @@ def _error_family_result(
         "duplicates": 0,
         "duplicate_keys": [],
         "results": [],
+        "returned_count": 0,
+        "total_visible": 0,
+        "truncated": False,
         "error": str(exc),
     }
+
+
+def _row_visible(
+    row: dict[str, Any],
+    *,
+    include_matches: bool,
+    view_filter: str | None,
+) -> bool:
+    if view_filter == "source":
+        return True
+    if view_filter == "fmg":
+        return row.get("fmg") is not None
+    if view_filter:
+        return row.get("status") == view_filter
+    return include_matches or row.get("status") != "match"
 
 
 def _index_items(

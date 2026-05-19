@@ -16,6 +16,7 @@ from app.routers import (
     tools_policy_viewer,
     tools_policy_shadow,
     tools_isdb,
+    tools_routes,
     tools_object_migration,
     tools_jinja_lab,
     schemas,
@@ -54,6 +55,7 @@ app.include_router(tools_diff.router)
 app.include_router(tools_policy_viewer.router)
 app.include_router(tools_policy_shadow.router)
 app.include_router(tools_isdb.router)
+app.include_router(tools_routes.router)
 app.include_router(tools_object_migration.router)
 app.include_router(tools_jinja_lab.router)
 app.include_router(schemas.router)

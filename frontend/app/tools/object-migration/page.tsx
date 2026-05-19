@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   compareObjectMigrationConfig,
+  exportObjectMigrationConfig,
   fetchObjectMigrationFamilies,
   type ObjectMigrationCompareResult,
   type ObjectMigrationFamily,
@@ -41,6 +42,8 @@ export default function ObjectMigrationComparePage() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ObjectMigrationCompareResult | null>(null);
   const [activeFilter, setActiveFilter] = useState<ResultFilter | null>(null);
+  const [rowLimit, setRowLimit] = useState(100);
+  const [exporting, setExporting] = useState<"json" | "csv" | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
   const { setPageContext, clearPageContext } = useChatContext();
@@ -129,17 +132,25 @@ export default function ObjectMigrationComparePage() {
     });
   };
 
-  const runCompare = async () => {
+  const runCompare = async (
+    viewFilter: ResultFilter | null = activeFilter,
+    nextRowLimit = rowLimit,
+    nextIncludeMatches = includeMatches,
+  ) => {
     if (!canRun) return;
     setPhase("running");
     setError(null);
     setResult(null);
-    setActiveFilter(null);
+    setActiveFilter(viewFilter);
     try {
       const data = await compareObjectMigrationConfig(
         configText,
         Array.from(selectedFamilies),
-        true,
+        {
+          includeMatches: nextIncludeMatches,
+          resultLimitPerFamily: nextRowLimit,
+          viewFilter,
+        },
       );
       setResult(data);
       setPhase("complete");
@@ -160,9 +171,47 @@ export default function ObjectMigrationComparePage() {
 
   const drillTo = (filter: ResultFilter) => {
     setActiveFilter(filter);
+    if (canRun) {
+      void runCompare(filter);
+    }
     requestAnimationFrame(() => {
       resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
+  };
+
+  const clearFilter = () => {
+    setActiveFilter(null);
+    if (canRun) {
+      void runCompare(null);
+    }
+  };
+
+  const changeRowLimit = (value: number) => {
+    setRowLimit(value);
+    if (canRun && result) {
+      void runCompare(activeFilter, value);
+    }
+  };
+
+  const exportResult = async (format: "json" | "csv") => {
+    if (!configText.trim() || selectedFamilies.size === 0) return;
+    setExporting(format);
+    setError(null);
+    try {
+      const blob = await exportObjectMigrationConfig(
+        configText,
+        Array.from(selectedFamilies),
+        format,
+      );
+      downloadBlob(
+        `object-migration-compare.${format}`,
+        blob,
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Object comparison export failed");
+    } finally {
+      setExporting(null);
+    }
   };
 
   return (
@@ -273,7 +322,13 @@ export default function ObjectMigrationComparePage() {
                 <input
                   type="checkbox"
                   checked={includeMatches}
-                  onChange={(event) => setIncludeMatches(event.target.checked)}
+                  onChange={(event) => {
+                    const next = event.target.checked;
+                    setIncludeMatches(next);
+                    if (result && canRun) {
+                      void runCompare(activeFilter, rowLimit, next);
+                    }
+                  }}
                   className="h-3.5 w-3.5 rounded border-slate-700 bg-slate-950 text-cyan-600"
                 />
                 <span>Show matching objects</span>
@@ -282,7 +337,7 @@ export default function ObjectMigrationComparePage() {
 
             <button
               type="button"
-              onClick={runCompare}
+              onClick={() => runCompare(null)}
               disabled={!canRun}
               className="w-full rounded-md bg-cyan-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-cyan-500 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-600"
             >
@@ -324,25 +379,39 @@ export default function ObjectMigrationComparePage() {
                     {activeFilter && (
                       <button
                         type="button"
-                        onClick={() => setActiveFilter(null)}
+                        onClick={clearFilter}
                         className="rounded-md border border-slate-800 px-3 py-2 text-xs text-slate-400 hover:border-cyan-700 hover:text-cyan-200"
                       >
                         Clear filter
                       </button>
                     )}
+                    <select
+                      value={rowLimit}
+                      onChange={(event) => changeRowLimit(Number(event.target.value))}
+                      disabled={phase === "running"}
+                      className="rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-300 outline-none hover:border-cyan-700 focus:border-cyan-600 disabled:text-slate-600"
+                    >
+                      {[50, 100, 250, 500, 1000].map((value) => (
+                        <option key={value} value={value}>
+                          {value} rows/family
+                        </option>
+                      ))}
+                    </select>
                     <button
                       type="button"
-                      onClick={() => exportJson(result)}
+                      onClick={() => exportResult("json")}
+                      disabled={Boolean(exporting)}
                       className="rounded-md border border-slate-800 px-3 py-2 text-xs text-slate-300 hover:border-cyan-700 hover:text-cyan-200"
                     >
-                      Export JSON
+                      {exporting === "json" ? "Exporting..." : "Export full JSON"}
                     </button>
                     <button
                       type="button"
-                      onClick={() => exportCsv(result)}
+                      onClick={() => exportResult("csv")}
+                      disabled={Boolean(exporting)}
                       className="rounded-md border border-slate-800 px-3 py-2 text-xs text-slate-300 hover:border-cyan-700 hover:text-cyan-200"
                     >
-                      Export CSV
+                      {exporting === "csv" ? "Exporting..." : "Export full CSV"}
                     </button>
                   </div>
                 </div>
@@ -477,6 +546,12 @@ function FamilyResults({
                 <Metric label="missing" value={family.missing} />
                 <Metric label="conflict" value={family.conflicts} />
                 <Metric label="dupe" value={family.duplicates} />
+                {family.truncated && (
+                  <Metric
+                    label="shown"
+                    value={`${family.returned_count}/${family.total_visible}`}
+                  />
+                )}
               </div>
             </button>
             {!collapsedFamily && (
@@ -490,6 +565,12 @@ function FamilyResults({
                         row={row}
                       />
                     ))}
+                    {family.truncated && (
+                      <div className="rounded-md border border-slate-800 bg-slate-950/60 px-4 py-3 text-xs text-slate-500">
+                        Showing {family.returned_count.toLocaleString()} of{" "}
+                        {family.total_visible.toLocaleString()} entries for this section.
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="px-4 py-6 text-sm text-slate-600">
@@ -512,6 +593,8 @@ function ResultRow({
   familyId: string;
   row: ObjectMigrationRow;
 }) {
+  const [showValues, setShowValues] = useState(false);
+
   return (
     <article
       id={`row-${familyId}-${slugify(row.key)}-${row.status}`}
@@ -536,9 +619,16 @@ function ResultRow({
           <span className="rounded border border-slate-800 bg-slate-950 px-2 py-1 text-[11px] text-slate-500">
             {row.diffs.length} diff{row.diffs.length === 1 ? "" : "s"}
           </span>
+          <button
+            type="button"
+            onClick={() => setShowValues((value) => !value)}
+            className="rounded border border-slate-800 bg-slate-950 px-2 py-1 text-[11px] text-slate-300 hover:border-cyan-700 hover:text-cyan-200"
+          >
+            {showValues ? "Hide values" : "Show values"}
+          </button>
         </div>
       </div>
-      <div className="grid grid-cols-1 gap-4 p-4 2xl:grid-cols-[minmax(420px,0.95fr)_minmax(620px,1.25fr)]">
+      <div className="grid grid-cols-1 gap-4 p-4">
         <div>
           <h4 className="text-xs font-semibold text-slate-300">Differences</h4>
           {row.diffs.length ? (
@@ -578,13 +668,15 @@ function ResultRow({
             </div>
           )}
         </div>
-        <div>
-          <h4 className="text-xs font-semibold text-slate-300">Object Values</h4>
-          <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-2">
-            <LabeledJsonPreview label="Source" value={row.source} />
-            <LabeledJsonPreview label="FortiManager" value={row.fmg} missingLabel="Missing" />
+        {showValues && (
+          <div>
+            <h4 className="text-xs font-semibold text-slate-300">Object Values</h4>
+            <div className="mt-3 grid grid-cols-1 gap-3 xl:grid-cols-2">
+              <LabeledJsonPreview label="Source" value={row.source} />
+              <LabeledJsonPreview label="FortiManager" value={row.fmg} missingLabel="Missing" />
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </article>
   );
@@ -604,7 +696,7 @@ function StatusBadge({ status }: { status: ObjectMigrationStatus }) {
   );
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
+function Metric({ label, value }: { label: string; value: number | string }) {
   return (
     <span className="rounded border border-slate-800 bg-slate-950 px-2 py-1">
       {label}: <span className="text-slate-300">{value}</span>
@@ -709,81 +801,7 @@ function filterLabel(filter: ResultFilter) {
   return labels[filter];
 }
 
-function exportJson(result: ObjectMigrationCompareResult) {
-  downloadText(
-    "object-migration-compare.json",
-    "application/json",
-    JSON.stringify(result, null, 2),
-  );
-}
-
-function exportCsv(result: ObjectMigrationCompareResult) {
-  const rows = [
-    [
-      "family",
-      "object",
-      "status",
-      "duplicate_count",
-      "diff_path",
-      "source_value",
-      "fmg_value",
-      "source_object",
-      "fmg_object",
-    ],
-  ];
-
-  for (const family of result.families) {
-    if (family.error) {
-      rows.push([
-        family.label,
-        "",
-        "error",
-        "",
-        "",
-        family.error,
-        "",
-        "",
-        "",
-      ]);
-    }
-    for (const row of family.results) {
-      const diffs = row.diffs.length
-        ? row.diffs
-        : [{ path: "", source: "", fmg: "" }];
-      for (const diff of diffs) {
-        rows.push([
-          family.label,
-          row.key,
-          row.status,
-          String(row.duplicate_count),
-          diff.path,
-          csvValue(diff.source),
-          csvValue(diff.fmg),
-          csvValue(row.source),
-          csvValue(row.fmg),
-        ]);
-      }
-    }
-  }
-
-  downloadText(
-    "object-migration-compare.csv",
-    "text/csv",
-    rows.map((row) => row.map(csvEscape).join(",")).join("\n"),
-  );
-}
-
-function csvValue(value: unknown): string {
-  if (value == null) return "";
-  return typeof value === "string" ? value : JSON.stringify(value);
-}
-
-function csvEscape(value: string): string {
-  return /[",\n\r]/.test(value) ? `"${value.replace(/"/g, "\"\"")}"` : value;
-}
-
-function downloadText(filename: string, type: string, text: string) {
-  const blob = new Blob([text], { type });
+function downloadBlob(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
